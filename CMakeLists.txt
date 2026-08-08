@@ -89,6 +89,9 @@ target_sources(spar
         src/ops/elementwise.cpp
         src/ops/reduction.cpp
         src/ops/matmul.cpp
+        src/ops/scalar.cpp
+        src/ops/unary.cpp
+        src/ops/softmax.cpp
     PUBLIC
         FILE_SET spar_modules TYPE CXX_MODULES
         BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -102,6 +105,9 @@ target_sources(spar
             src/ops/elementwise.cppm
             src/ops/reduction.cppm
             src/ops/matmul.cppm
+            src/ops/scalar.cppm
+            src/ops/unary.cppm
+            src/ops/softmax.cppm
 )
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")

@@ -43,6 +43,10 @@ template <typename T> Tensor max_values(const Tensor& input) {
   const auto values{input.span<T>()};
   T result{values[0]};
   for (size_t index{1}; index < values.size(); ++index) {
+    if (isnan(values[index])) {
+      result = values[index];
+      break;
+    }
     if (values[index] > result) {
       result = values[index];
     }

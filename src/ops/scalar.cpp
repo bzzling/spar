@@ -1,0 +1,64 @@
+module spar.ops.scalar;
+
+import std;
+import spar.dtype;
+import spar.tensor;
+
+using namespace std;
+
+namespace spar {
+namespace {
+
+void validate_scalar_dtype(DType dtype) {
+  if (dtype != DType::Float32 && dtype != DType::Float64) {
+    throw invalid_argument{"Scalar operations currently support floating-point dtypes only"};
+  }
+}
+
+template <typename T, typename Operation>
+Tensor apply_scalar(const Tensor& input, double value, Operation operation) {
+  const T scalar{static_cast<T>(value)};
+  Tensor output{input.shape(), input.dtype()};
+  const auto input_values{input.span<T>()};
+  auto output_values{output.span<T>()};
+
+  for (size_t index{0}; index < output_values.size(); ++index) {
+    output_values[index] = operation(input_values[index], scalar);
+  }
+  return output;
+}
+
+template <typename Operation>
+Tensor dispatch_scalar(const Tensor& input, double value, Operation operation) {
+  validate_scalar_dtype(input.dtype());
+  switch (input.dtype()) {
+  case DType::Float32:
+    return apply_scalar<float>(input, value, operation);
+  case DType::Float64:
+    return apply_scalar<double>(input, value, operation);
+  case DType::Int32:
+  case DType::Int64:
+    throw logic_error{"Scalar dtype validation invariant violated"};
+  }
+  throw logic_error{"Scalar dtype validation invariant violated"};
+}
+
+} // namespace
+
+Tensor add_scalar(const Tensor& input, double value) {
+  return dispatch_scalar(input, value, [](auto element, auto scalar) { return element + scalar; });
+}
+
+Tensor subtract_scalar(const Tensor& input, double value) {
+  return dispatch_scalar(input, value, [](auto element, auto scalar) { return element - scalar; });
+}
+
+Tensor multiply_scalar(const Tensor& input, double value) {
+  return dispatch_scalar(input, value, [](auto element, auto scalar) { return element * scalar; });
+}
+
+Tensor divide_scalar(const Tensor& input, double value) {
+  return dispatch_scalar(input, value, [](auto element, auto scalar) { return element / scalar; });
+}
+
+} // namespace spar
