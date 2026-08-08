@@ -8,8 +8,16 @@ using namespace std;
 
 namespace spar::detail {
 
+struct AutogradMeta;
+
+struct AutogradEdge final {
+  shared_ptr<AutogradMeta> identity;
+  Shape expected_shape;
+  DType expected_dtype;
+};
+
 struct AutogradNode final {
-  vector<Tensor> parents;
+  vector<AutogradEdge> parents;
   BackwardFunction backward;
 };
 
@@ -39,11 +47,17 @@ void record_operation(Tensor& output, vector<Tensor> requiring_parents, Backward
     }
   }
 
+  vector<AutogradEdge> edges;
+  edges.reserve(requiring_parents.size());
+  for (const Tensor& parent : requiring_parents) {
+    edges.push_back(AutogradEdge{AutogradAccess::meta(parent), parent.shape(), parent.dtype()});
+  }
+
   auto& output_meta{AutogradAccess::meta(output)};
   output_meta = make_shared<AutogradMeta>();
   output_meta->requires_grad = true;
   output_meta->grad_fn =
-      make_shared<AutogradNode>(AutogradNode{std::move(requiring_parents), std::move(backward)});
+      make_shared<AutogradNode>(AutogradNode{std::move(edges), std::move(backward)});
 }
 
 } // namespace spar::detail
@@ -80,8 +94,10 @@ void add_gradient_values(Tensor& destination, const Tensor& contribution) {
   }
 }
 
-[[nodiscard]] Tensor independent_gradient(const Tensor& contribution, const Tensor& parent) {
-  if (contribution.shape() != parent.shape() || contribution.dtype() != parent.dtype()) {
+[[nodiscard]] Tensor independent_gradient(const Tensor& contribution,
+                                          const detail::AutogradEdge& parent) {
+  if (contribution.shape() != parent.expected_shape ||
+      contribution.dtype() != parent.expected_dtype) {
     throw logic_error{"Backward rule produced a gradient with incorrect shape or dtype"};
   }
   if (contribution.requires_grad()) {
@@ -131,7 +147,7 @@ Tensor Tensor::grad() const {
   if (!has_grad()) {
     throw logic_error{"Tensor has no accumulated gradient"};
   }
-  return *autograd_->leaf_grad;
+  return autograd_->leaf_grad->detach();
 }
 
 void Tensor::zero_grad() {
@@ -162,8 +178,8 @@ void Tensor::backward() {
       return;
     }
     if (meta->grad_fn != nullptr) {
-      for (const Tensor& parent : meta->grad_fn->parents) {
-        self(self, parent.autograd_);
+      for (const detail::AutogradEdge& parent : meta->grad_fn->parents) {
+        self(self, parent.identity);
       }
     }
     topological_order.push_back(meta);
@@ -197,11 +213,11 @@ void Tensor::backward() {
     }
 
     for (size_t index{0}; index < contributions.size(); ++index) {
-      const Tensor& parent{meta->grad_fn->parents[index]};
+      const detail::AutogradEdge& parent{meta->grad_fn->parents[index]};
       Tensor contribution{independent_gradient(contributions[index], parent)};
-      auto existing{gradients.find(parent.autograd_.get())};
+      auto existing{gradients.find(parent.identity.get())};
       if (existing == gradients.end()) {
-        gradients.emplace(parent.autograd_.get(), std::move(contribution));
+        gradients.emplace(parent.identity.get(), std::move(contribution));
       } else {
         add_gradient_values(existing->second, contribution);
       }

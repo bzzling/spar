@@ -137,8 +137,14 @@ Tensor multiply(const Tensor& a, const Tensor& b) {
   if (a.requires_grad() || b.requires_grad()) {
     const bool grad_a{a.requires_grad()};
     const bool grad_b{b.requires_grad()};
-    const Tensor saved_a{a.detach().clone()};
-    const Tensor saved_b{b.detach().clone()};
+    optional<Tensor> saved_a;
+    optional<Tensor> saved_b;
+    if (grad_b) {
+      saved_a.emplace(a.detach().clone());
+    }
+    if (grad_a) {
+      saved_b.emplace(b.detach().clone());
+    }
     vector<Tensor> parents;
     if (grad_a) {
       parents.push_back(a);
@@ -150,10 +156,10 @@ Tensor multiply(const Tensor& a, const Tensor& b) {
                              [grad_a, grad_b, saved_a, saved_b](const Tensor& gradient) {
                                vector<Tensor> contributions;
                                if (grad_a) {
-                                 contributions.push_back(multiply(gradient, saved_b));
+                                 contributions.push_back(multiply(gradient, *saved_b));
                                }
                                if (grad_b) {
-                                 contributions.push_back(multiply(gradient, saved_a));
+                                 contributions.push_back(multiply(gradient, *saved_a));
                                }
                                return contributions;
                              });
@@ -163,19 +169,40 @@ Tensor multiply(const Tensor& a, const Tensor& b) {
 
 Tensor divide(const Tensor& a, const Tensor& b) {
   validate_binary_inputs(a, b);
+  Tensor output{a.dtype() == DType::Float32 ? divide_values<float>(a, b)
+                                            : divide_values<double>(a, b)};
   if (a.requires_grad() || b.requires_grad()) {
-    throw logic_error{"autograd for tensor divide is not implemented yet"};
+    const bool grad_a{a.requires_grad()};
+    const bool grad_b{b.requires_grad()};
+    optional<Tensor> saved_a;
+    optional<Tensor> saved_b;
+    if (grad_b) {
+      saved_a.emplace(a.detach().clone());
+    }
+    saved_b.emplace(b.detach().clone());
+
+    vector<Tensor> parents;
+    if (grad_a) {
+      parents.push_back(a);
+    }
+    if (grad_b) {
+      parents.push_back(b);
+    }
+    detail::record_operation(
+        output, std::move(parents), [grad_a, grad_b, saved_a, saved_b](const Tensor& gradient) {
+          vector<Tensor> contributions;
+          if (grad_a) {
+            contributions.push_back(divide(gradient, *saved_b));
+          }
+          if (grad_b) {
+            const auto denominator{multiply(*saved_b, *saved_b)};
+            const auto numerator{multiply(gradient, *saved_a)};
+            contributions.push_back(multiply_scalar(divide(numerator, denominator), -1.0));
+          }
+          return contributions;
+        });
   }
-  switch (a.dtype()) {
-  case DType::Float32:
-    return divide_values<float>(a, b);
-  case DType::Float64:
-    return divide_values<double>(a, b);
-  case DType::Int32:
-  case DType::Int64:
-    throw logic_error{"Elementwise dtype validation invariant violated"};
-  }
-  throw logic_error{"Elementwise dtype validation invariant violated"};
+  return output;
 }
 
 } // namespace spar

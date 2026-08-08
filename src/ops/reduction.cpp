@@ -84,22 +84,28 @@ Tensor sum(const Tensor& input) {
 
 Tensor mean(const Tensor& input) {
   validate_reduction_input(input);
-  if (input.requires_grad()) {
-    throw logic_error{"autograd for mean is not implemented yet"};
-  }
   if (input.numel() == 0) {
     throw invalid_argument{"mean is undefined for an empty tensor"};
   }
-  switch (input.dtype()) {
-  case DType::Float32:
-    return mean_values<float>(input);
-  case DType::Float64:
-    return mean_values<double>(input);
-  case DType::Int32:
-  case DType::Int64:
-    throw logic_error{"Reduction dtype validation invariant violated"};
+  Tensor output{input.dtype() == DType::Float32 ? mean_values<float>(input)
+                                                : mean_values<double>(input)};
+  if (input.requires_grad()) {
+    const Shape input_shape{input.shape()};
+    const DType input_dtype{input.dtype()};
+    const size_t input_numel{input.numel()};
+    detail::record_operation(
+        output, {input}, [input_shape, input_dtype, input_numel](const Tensor& gradient) {
+          Tensor contribution{input_shape, input_dtype};
+          if (input_dtype == DType::Float32) {
+            contribution.fill<float>(gradient.span<float>()[0] / static_cast<float>(input_numel));
+          } else {
+            contribution.fill<double>(gradient.span<double>()[0] /
+                                      static_cast<double>(input_numel));
+          }
+          return vector<Tensor>{std::move(contribution)};
+        });
   }
-  throw logic_error{"Reduction dtype validation invariant violated"};
+  return output;
 }
 
 Tensor reduce_max(const Tensor& input) {

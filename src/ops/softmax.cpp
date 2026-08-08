@@ -19,9 +19,43 @@ void validate_softmax_input(const Tensor& input) {
   if (!input.is_contiguous()) {
     throw invalid_argument{"softmax currently requires a contiguous tensor"};
   }
-  if (input.requires_grad()) {
-    throw logic_error{"autograd for softmax is not implemented yet"};
+}
+
+template <typename T> bool has_undefined_softmax_derivative(const Tensor& input) {
+  const auto values{input.span<T>()};
+  const T positive_infinity{numeric_limits<T>::infinity()};
+  bool all_negative_infinity{true};
+  for (const T value : values) {
+    if (isnan(value) || value == positive_infinity) {
+      return true;
+    }
+    if (value != -positive_infinity) {
+      all_negative_infinity = false;
+    }
   }
+  return all_negative_infinity;
+}
+
+template <typename T>
+Tensor softmax_gradient(const Tensor& gradient, const Tensor& saved_output,
+                        bool undefined_derivative) {
+  Tensor contribution{saved_output.shape(), saved_output.dtype()};
+  if (undefined_derivative) {
+    contribution.fill<T>(numeric_limits<T>::quiet_NaN());
+    return contribution;
+  }
+
+  const auto gradient_values{gradient.span<T>()};
+  const auto output_values{saved_output.span<T>()};
+  auto contribution_values{contribution.span<T>()};
+  T dot{0};
+  for (size_t index{0}; index < output_values.size(); ++index) {
+    dot += gradient_values[index] * output_values[index];
+  }
+  for (size_t index{0}; index < output_values.size(); ++index) {
+    contribution_values[index] = output_values[index] * (gradient_values[index] - dot);
+  }
+  return contribution;
 }
 
 template <typename T> Tensor softmax_values(const Tensor& input) {
@@ -79,16 +113,25 @@ template <typename T> Tensor softmax_values(const Tensor& input) {
 
 Tensor softmax(const Tensor& input) {
   validate_softmax_input(input);
-  switch (input.dtype()) {
-  case DType::Float32:
-    return softmax_values<float>(input);
-  case DType::Float64:
-    return softmax_values<double>(input);
-  case DType::Int32:
-  case DType::Int64:
-    throw logic_error{"softmax dtype validation invariant violated"};
+  Tensor output{input.dtype() == DType::Float32 ? softmax_values<float>(input)
+                                                : softmax_values<double>(input)};
+  if (input.requires_grad()) {
+    const bool undefined_derivative{input.dtype() == DType::Float32
+                                        ? has_undefined_softmax_derivative<float>(input)
+                                        : has_undefined_softmax_derivative<double>(input)};
+    const Tensor saved_output{output.detach().clone()};
+    const DType dtype{input.dtype()};
+    detail::record_operation(
+        output, {input}, [saved_output, undefined_derivative, dtype](const Tensor& gradient) {
+          if (dtype == DType::Float32) {
+            return vector<Tensor>{
+                softmax_gradient<float>(gradient, saved_output, undefined_derivative)};
+          }
+          return vector<Tensor>{
+              softmax_gradient<double>(gradient, saved_output, undefined_derivative)};
+        });
   }
-  throw logic_error{"softmax dtype validation invariant violated"};
+  return output;
 }
 
 } // namespace spar

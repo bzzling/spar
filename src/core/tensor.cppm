@@ -50,6 +50,7 @@ public:
   /// Runs first-order reverse-mode differentiation from a one-element loss.
   void backward();
   /// Shares value Storage while creating a fresh leaf identity with no graph history.
+  /// Mutations through a detached alias are explicit and are not version-checked yet.
   [[nodiscard]] Tensor detach() const;
 
   /// always returns an independent contiguous row-major copy in logical element order.
@@ -64,8 +65,12 @@ public:
   [[nodiscard]] Tensor permute(std::span<const std::size_t> axes) const;
   [[nodiscard]] Tensor permute(std::initializer_list<std::size_t> axes) const;
 
-  /// returns mutable typed access after validating dtype and logical contiguity.
+  /// returns mutable typed access for a contiguous non-grad identity with a matching dtype.
   template <typename T> [[nodiscard]] std::span<T> span() & {
+    if (requires_grad()) {
+      throw std::logic_error{
+          "Mutable tensor access requires a non-grad Tensor identity; detach explicitly first"};
+    }
     validate_access<T>();
     if (numel() == 0) {
       return {};

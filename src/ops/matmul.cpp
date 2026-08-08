@@ -59,8 +59,14 @@ Tensor matmul(const Tensor& a, const Tensor& b) {
   if (a.requires_grad() || b.requires_grad()) {
     const bool grad_a{a.requires_grad()};
     const bool grad_b{b.requires_grad()};
-    const Tensor saved_a{a.detach().clone()};
-    const Tensor saved_b{b.detach().clone()};
+    optional<Tensor> saved_a;
+    optional<Tensor> saved_b;
+    if (grad_b) {
+      saved_a.emplace(a.detach().clone());
+    }
+    if (grad_a) {
+      saved_b.emplace(b.detach().clone());
+    }
     vector<Tensor> parents;
     if (grad_a) {
       parents.push_back(a);
@@ -72,10 +78,10 @@ Tensor matmul(const Tensor& a, const Tensor& b) {
         output, std::move(parents), [grad_a, grad_b, saved_a, saved_b](const Tensor& gradient) {
           vector<Tensor> contributions;
           if (grad_a) {
-            contributions.push_back(matmul(gradient, saved_b.transpose(0, 1).contiguous()));
+            contributions.push_back(matmul(gradient, saved_b->transpose(0, 1).contiguous()));
           }
           if (grad_b) {
-            contributions.push_back(matmul(saved_a.transpose(0, 1).contiguous(), gradient));
+            contributions.push_back(matmul(saved_a->transpose(0, 1).contiguous(), gradient));
           }
           return contributions;
         });
