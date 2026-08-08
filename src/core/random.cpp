@@ -34,6 +34,17 @@ Tensor random_uniform(Shape shape, DType dtype, Random& random, double low, doub
     throw invalid_argument{"random_uniform requires low < high"};
   }
 
+  switch (dtype) {
+  case DType::Float32:
+  case DType::Float64:
+    break;
+  case DType::Int32:
+  case DType::Int64:
+    throw invalid_argument{"random_uniform currently supports floating-point dtypes only"};
+  default:
+    throw invalid_argument{"random_uniform received an unknown dtype"};
+  }
+
   Tensor tensor{std::move(shape), dtype};
   switch (dtype) {
   case DType::Float32: {
@@ -53,7 +64,9 @@ Tensor random_uniform(Shape shape, DType dtype, Random& random, double low, doub
   }
   case DType::Int32:
   case DType::Int64:
-    throw invalid_argument{"random_uniform currently supports floating-point dtypes only"};
+    throw logic_error{"random_uniform dtype validation invariant violated"};
+  default:
+    throw logic_error{"random_uniform dtype validation invariant violated"};
   }
   return tensor;
 }

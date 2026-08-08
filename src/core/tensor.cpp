@@ -28,9 +28,31 @@ Tensor& Tensor::operator=(const Tensor& other) {
   return *this;
 }
 
-Tensor::Tensor(Tensor&&) noexcept = default;
-Tensor& Tensor::operator=(Tensor&&) noexcept = default;
+Tensor::Tensor(Tensor&& other) noexcept
+    : dtype_{other.dtype_}, shape_{std::move(other.shape_)}, strides_{std::move(other.strides_)},
+      nbytes_{other.nbytes_}, storage_{std::move(other.storage_)} {
+  other.reset_to_empty();
+}
+
+Tensor& Tensor::operator=(Tensor&& other) noexcept {
+  if (this != &other) {
+    dtype_ = other.dtype_;
+    shape_ = std::move(other.shape_);
+    strides_ = std::move(other.strides_);
+    nbytes_ = other.nbytes_;
+    storage_ = std::move(other.storage_);
+    other.reset_to_empty();
+  }
+  return *this;
+}
+
 Tensor::~Tensor() = default;
+
+void Tensor::reset_to_empty() noexcept {
+  strides_.clear();
+  nbytes_ = 0;
+  storage_.reset();
+}
 
 void Tensor::swap(Tensor& other) noexcept {
   using std::swap;

@@ -16,7 +16,7 @@ public:
   /// makes an independent deep copy.
   Tensor(const Tensor& other);
   Tensor& operator=(const Tensor& other);
-  /// transfers storage in constant time.
+  /// transfers storage in constant time and leaves `other` empty.
   Tensor(Tensor&&) noexcept;
   Tensor& operator=(Tensor&&) noexcept;
   ~Tensor();
@@ -49,6 +49,8 @@ public:
   }
 
 private:
+  void reset_to_empty() noexcept;
+
   [[nodiscard]] static std::size_t checked_nbytes(std::size_t numel, DType dtype);
   [[nodiscard]] static std::unique_ptr<std::byte[]> allocate(std::size_t nbytes);
 

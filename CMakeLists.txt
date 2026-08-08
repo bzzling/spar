@@ -44,26 +44,25 @@ include(CMakePackageConfigHelpers)
 option(SPAR_BUILD_TESTS "Build Spar tests" OFF)
 option(SPAR_BUILD_EXAMPLES "Build Spar examples" OFF)
 
-if(NOT CMAKE_GENERATOR MATCHES "Ninja|Visual Studio 17 2022")
+if(NOT CMAKE_GENERATOR MATCHES "^Ninja")
     message(FATAL_ERROR
-        "Spar's C++ module build requires Ninja, Ninja Multi-Config, or Visual Studio 17 2022. "
+        "Spar's C++23 module build currently requires Ninja or Ninja Multi-Config. "
         "Detected generator: ${CMAKE_GENERATOR}.")
 endif()
 
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 18)
-        message(FATAL_ERROR
-            "Spar requires LLVM Clang 18 or newer for reliable C++ module support. "
-            "Detected ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}.")
+if(NOT 23 IN_LIST CMAKE_CXX_COMPILER_IMPORT_STD
+   OR CMAKE_CXX_COMPILER_IMPORT_STD_ERROR_MESSAGE)
+    set(SPAR_IMPORT_STD_DETAIL "")
+    if(CMAKE_CXX_COMPILER_IMPORT_STD_ERROR_MESSAGE)
+        string(APPEND SPAR_IMPORT_STD_DETAIL
+            " CMake reported: ${CMAKE_CXX_COMPILER_IMPORT_STD_ERROR_MESSAGE}")
     endif()
-elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14)
-        message(FATAL_ERROR "Spar requires GCC 14 or newer for C++ module support.")
-    endif()
-elseif(NOT MSVC)
-    message(WARNING
-        "This compiler has not yet been validated for Spar's C++ module build. "
-        "LLVM Clang 18+ with Ninja is the supported path.")
+    message(FATAL_ERROR
+        "Spar requires C++23 'import std' support, but CMake did not detect it for "
+        "${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} with ${CMAKE_GENERATOR}. "
+        "Use a recent LLVM Clang with libc++ standard-library modules and Ninja. "
+        "On macOS, set CMAKE_CXX_STDLIB_MODULES_JSON to LLVM libc++'s "
+        "libc++.modules.json if it is not found automatically.${SPAR_IMPORT_STD_DETAIL}")
 endif()
 
 if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"

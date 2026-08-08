@@ -21,6 +21,11 @@ public:
   /// constructs a shape from an owned dimension vector.
   explicit Shape(std::vector<dimension_type> dimensions);
 
+  Shape(const Shape&) = default;
+  Shape& operator=(const Shape&) = default;
+  Shape(Shape&& other) noexcept;
+  Shape& operator=(Shape&& other) noexcept;
+
   /// returns the number of dimensions.
   [[nodiscard]] std::size_t rank() const noexcept;
 
@@ -39,6 +44,7 @@ public:
   friend bool operator==(const Shape&, const Shape&) = default;
 
 private:
+  [[nodiscard]] static stride_type checked_extent(dimension_type dimension);
   [[nodiscard]] static std::size_t compute_numel(const std::vector<dimension_type>& dimensions);
 
   std::vector<dimension_type> dimensions_;
