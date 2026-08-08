@@ -83,6 +83,7 @@ set_target_properties(spar PROPERTIES
 
 target_sources(spar
     PRIVATE
+        src/autograd/autograd.cpp
         src/core/storage.cpp
         src/core/shape.cpp
         src/core/tensor.cpp

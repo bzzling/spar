@@ -54,16 +54,33 @@ template <typename T> Tensor matmul_values(const Tensor& a, const Tensor& b) {
 
 Tensor matmul(const Tensor& a, const Tensor& b) {
   validate_matmul_inputs(a, b);
-  switch (a.dtype()) {
-  case DType::Float32:
-    return matmul_values<float>(a, b);
-  case DType::Float64:
-    return matmul_values<double>(a, b);
-  case DType::Int32:
-  case DType::Int64:
-    throw logic_error{"matmul dtype validation invariant violated"};
+  Tensor output{a.dtype() == DType::Float32 ? matmul_values<float>(a, b)
+                                            : matmul_values<double>(a, b)};
+  if (a.requires_grad() || b.requires_grad()) {
+    const bool grad_a{a.requires_grad()};
+    const bool grad_b{b.requires_grad()};
+    const Tensor saved_a{a.detach().clone()};
+    const Tensor saved_b{b.detach().clone()};
+    vector<Tensor> parents;
+    if (grad_a) {
+      parents.push_back(a);
+    }
+    if (grad_b) {
+      parents.push_back(b);
+    }
+    detail::record_operation(
+        output, std::move(parents), [grad_a, grad_b, saved_a, saved_b](const Tensor& gradient) {
+          vector<Tensor> contributions;
+          if (grad_a) {
+            contributions.push_back(matmul(gradient, saved_b.transpose(0, 1).contiguous()));
+          }
+          if (grad_b) {
+            contributions.push_back(matmul(saved_a.transpose(0, 1).contiguous(), gradient));
+          }
+          return contributions;
+        });
   }
-  throw logic_error{"matmul dtype validation invariant violated"};
+  return output;
 }
 
 } // namespace spar

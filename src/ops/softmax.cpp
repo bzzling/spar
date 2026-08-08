@@ -19,6 +19,9 @@ void validate_softmax_input(const Tensor& input) {
   if (!input.is_contiguous()) {
     throw invalid_argument{"softmax currently requires a contiguous tensor"};
   }
+  if (input.requires_grad()) {
+    throw logic_error{"autograd for softmax is not implemented yet"};
+  }
 }
 
 template <typename T> Tensor softmax_values(const Tensor& input) {

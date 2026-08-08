@@ -13,6 +13,7 @@ Tensor::Tensor(Shape shape, DType dtype)
     : storage_{}, dtype_{dtype}, shape_{std::move(shape)}, strides_{shape_.contiguous_strides()},
       storage_offset_{0}, nbytes_{checked_nbytes(shape_.numel(), dtype_)} {
   storage_ = make_shared<detail::Storage>(nbytes_);
+  initialize_autograd();
   validate_view_bounds();
 }
 
@@ -21,13 +22,14 @@ Tensor::Tensor(shared_ptr<detail::Storage> storage, DType dtype, Shape shape,
     : storage_{std::move(storage)}, dtype_{dtype}, shape_{std::move(shape)},
       strides_{std::move(strides)}, storage_offset_{storage_offset},
       nbytes_{checked_nbytes(shape_.numel(), dtype_)} {
+  initialize_autograd();
   validate_view_bounds();
 }
 
 Tensor::Tensor(Tensor&& other) noexcept
     : storage_{std::move(other.storage_)}, dtype_{other.dtype_}, shape_{std::move(other.shape_)},
       strides_{std::move(other.strides_)}, storage_offset_{other.storage_offset_},
-      nbytes_{other.nbytes_} {
+      nbytes_{other.nbytes_}, autograd_{std::move(other.autograd_)} {
   other.reset_to_empty();
 }
 
@@ -39,6 +41,7 @@ Tensor& Tensor::operator=(Tensor&& other) noexcept {
     strides_ = std::move(other.strides_);
     storage_offset_ = other.storage_offset_;
     nbytes_ = other.nbytes_;
+    autograd_ = std::move(other.autograd_);
     other.reset_to_empty();
   }
   return *this;
@@ -51,6 +54,7 @@ void Tensor::reset_to_empty() noexcept {
   strides_.clear();
   storage_offset_ = 0;
   nbytes_ = 0;
+  autograd_.reset();
 }
 
 void Tensor::swap(Tensor& other) noexcept {
@@ -61,6 +65,7 @@ void Tensor::swap(Tensor& other) noexcept {
   swap(strides_, other.strides_);
   swap(storage_offset_, other.storage_offset_);
   swap(nbytes_, other.nbytes_);
+  swap(autograd_, other.autograd_);
 }
 
 size_t Tensor::rank() const noexcept {
@@ -104,7 +109,7 @@ bool Tensor::is_contiguous() const noexcept {
   return true;
 }
 
-Tensor Tensor::clone() const {
+Tensor Tensor::materialize_contiguous() const {
   Tensor output{shape_, dtype_};
   const auto copy_values = [this, &output]<typename T> {
     const auto source_base{reinterpret_cast<const T*>(data())};
@@ -130,11 +135,25 @@ Tensor Tensor::clone() const {
   return output;
 }
 
+Tensor Tensor::clone() const {
+  auto output{materialize_contiguous()};
+  if (requires_grad()) {
+    detail::record_operation(output, {*this},
+                             [](const Tensor& gradient) { return vector<Tensor>{gradient}; });
+  }
+  return output;
+}
+
 Tensor Tensor::contiguous() const {
   if (is_contiguous()) {
     return *this;
   }
-  return clone();
+  auto output{materialize_contiguous()};
+  if (requires_grad()) {
+    detail::record_operation(output, {*this},
+                             [](const Tensor& gradient) { return vector<Tensor>{gradient}; });
+  }
+  return output;
 }
 
 Tensor Tensor::reshape(Shape new_shape) const {
@@ -145,7 +164,14 @@ Tensor Tensor::reshape(Shape new_shape) const {
     throw invalid_argument{"reshape requires the same number of elements"};
   }
   auto new_strides{new_shape.contiguous_strides()};
-  return Tensor{storage_, dtype_, std::move(new_shape), std::move(new_strides), storage_offset_};
+  Tensor output{storage_, dtype_, std::move(new_shape), std::move(new_strides), storage_offset_};
+  if (requires_grad()) {
+    const Shape original_shape{shape_};
+    detail::record_operation(output, {*this}, [original_shape](const Tensor& gradient) {
+      return vector<Tensor>{gradient.reshape(original_shape)};
+    });
+  }
+  return output;
 }
 
 Tensor Tensor::transpose(size_t axis_a, size_t axis_b) const {
@@ -156,8 +182,14 @@ Tensor Tensor::transpose(size_t axis_a, size_t axis_b) const {
   auto new_strides{strides_};
   std::swap(dimensions[axis_a], dimensions[axis_b]);
   std::swap(new_strides[axis_a], new_strides[axis_b]);
-  return Tensor{storage_, dtype_, Shape{std::move(dimensions)}, std::move(new_strides),
+  Tensor output{storage_, dtype_, Shape{std::move(dimensions)}, std::move(new_strides),
                 storage_offset_};
+  if (requires_grad()) {
+    detail::record_operation(output, {*this}, [axis_a, axis_b](const Tensor& gradient) {
+      return vector<Tensor>{gradient.transpose(axis_a, axis_b).contiguous()};
+    });
+  }
+  return output;
 }
 
 Tensor Tensor::permute(std::span<const size_t> axes) const {
@@ -180,12 +212,28 @@ Tensor Tensor::permute(std::span<const size_t> axes) const {
     dimensions[result_axis] = shape_[source_axis];
     new_strides[result_axis] = strides_[source_axis];
   }
-  return Tensor{storage_, dtype_, Shape{std::move(dimensions)}, std::move(new_strides),
+  vector<size_t> inverse_axes(rank());
+  for (size_t result_axis{0}; result_axis < axes.size(); ++result_axis) {
+    inverse_axes[axes[result_axis]] = result_axis;
+  }
+
+  Tensor output{storage_, dtype_, Shape{std::move(dimensions)}, std::move(new_strides),
                 storage_offset_};
+  if (requires_grad()) {
+    detail::record_operation(output, {*this},
+                             [inverse_axes = std::move(inverse_axes)](const Tensor& gradient) {
+                               return vector<Tensor>{gradient.permute(inverse_axes).contiguous()};
+                             });
+  }
+  return output;
 }
 
 Tensor Tensor::permute(initializer_list<size_t> axes) const {
   return permute(std::span<const size_t>{axes.begin(), axes.size()});
+}
+
+Tensor Tensor::detach() const {
+  return Tensor{storage_, dtype_, shape_, strides_, storage_offset_};
 }
 
 size_t Tensor::checked_nbytes(size_t numel, DType dtype) {

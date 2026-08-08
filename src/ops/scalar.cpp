@@ -53,19 +53,45 @@ Tensor dispatch_scalar(const Tensor& input, double value, Operation operation) {
 } // namespace
 
 Tensor add_scalar(const Tensor& input, double value) {
-  return dispatch_scalar(input, value, [](auto element, auto scalar) { return element + scalar; });
+  Tensor output{
+      dispatch_scalar(input, value, [](auto element, auto scalar) { return element + scalar; })};
+  if (input.requires_grad()) {
+    detail::record_operation(output, {input},
+                             [](const Tensor& gradient) { return vector<Tensor>{gradient}; });
+  }
+  return output;
 }
 
 Tensor subtract_scalar(const Tensor& input, double value) {
-  return dispatch_scalar(input, value, [](auto element, auto scalar) { return element - scalar; });
+  Tensor output{
+      dispatch_scalar(input, value, [](auto element, auto scalar) { return element - scalar; })};
+  if (input.requires_grad()) {
+    detail::record_operation(output, {input},
+                             [](const Tensor& gradient) { return vector<Tensor>{gradient}; });
+  }
+  return output;
 }
 
 Tensor multiply_scalar(const Tensor& input, double value) {
-  return dispatch_scalar(input, value, [](auto element, auto scalar) { return element * scalar; });
+  Tensor output{
+      dispatch_scalar(input, value, [](auto element, auto scalar) { return element * scalar; })};
+  if (input.requires_grad()) {
+    detail::record_operation(output, {input}, [value](const Tensor& gradient) {
+      return vector<Tensor>{multiply_scalar(gradient, value)};
+    });
+  }
+  return output;
 }
 
 Tensor divide_scalar(const Tensor& input, double value) {
-  return dispatch_scalar(input, value, [](auto element, auto scalar) { return element / scalar; });
+  Tensor output{
+      dispatch_scalar(input, value, [](auto element, auto scalar) { return element / scalar; })};
+  if (input.requires_grad()) {
+    detail::record_operation(output, {input}, [value](const Tensor& gradient) {
+      return vector<Tensor>{divide_scalar(gradient, value)};
+    });
+  }
+  return output;
 }
 
 } // namespace spar

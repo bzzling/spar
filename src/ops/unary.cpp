@@ -30,8 +30,12 @@ Tensor apply_unary(const Tensor& input, Operation operation) {
   return output;
 }
 
-template <typename Operation> Tensor dispatch_unary(const Tensor& input, Operation operation) {
+template <typename Operation>
+Tensor dispatch_unary(const Tensor& input, string_view operation_name, Operation operation) {
   validate_unary_input(input);
+  if (input.requires_grad()) {
+    throw logic_error{"autograd for " + string{operation_name} + " is not implemented yet"};
+  }
   switch (input.dtype()) {
   case DType::Float32:
     return apply_unary<float>(input, operation);
@@ -55,35 +59,35 @@ template <typename T> T stable_sigmoid(T value) {
 } // namespace
 
 Tensor negate(const Tensor& input) {
-  return dispatch_unary(input, [](auto value) { return -value; });
+  return dispatch_unary(input, "negate", [](auto value) { return -value; });
 }
 
 Tensor square(const Tensor& input) {
-  return dispatch_unary(input, [](auto value) { return value * value; });
+  return dispatch_unary(input, "square", [](auto value) { return value * value; });
 }
 
 Tensor reciprocal(const Tensor& input) {
-  return dispatch_unary(input, [](auto value) { return decltype(value){1} / value; });
+  return dispatch_unary(input, "reciprocal", [](auto value) { return decltype(value){1} / value; });
 }
 
 Tensor exp(const Tensor& input) {
-  return dispatch_unary(input, [](auto value) { return std::exp(value); });
+  return dispatch_unary(input, "exp", [](auto value) { return std::exp(value); });
 }
 
 Tensor log(const Tensor& input) {
-  return dispatch_unary(input, [](auto value) { return std::log(value); });
+  return dispatch_unary(input, "log", [](auto value) { return std::log(value); });
 }
 
 Tensor sqrt(const Tensor& input) {
-  return dispatch_unary(input, [](auto value) { return std::sqrt(value); });
+  return dispatch_unary(input, "sqrt", [](auto value) { return std::sqrt(value); });
 }
 
 Tensor sigmoid(const Tensor& input) {
-  return dispatch_unary(input, [](auto value) { return stable_sigmoid(value); });
+  return dispatch_unary(input, "sigmoid", [](auto value) { return stable_sigmoid(value); });
 }
 
 Tensor silu(const Tensor& input) {
-  return dispatch_unary(input, [](auto value) { return value * stable_sigmoid(value); });
+  return dispatch_unary(input, "silu", [](auto value) { return value * stable_sigmoid(value); });
 }
 
 } // namespace spar

@@ -5,6 +5,11 @@ import spar.dtype;
 import spar.shape;
 import spar.storage;
 
+namespace spar::detail {
+struct AutogradAccess;
+struct AutogradMeta;
+} // namespace spar::detail
+
 export namespace spar {
 
 /// A typed, shaped, strided view over reference-counted CPU Storage.
@@ -31,6 +36,21 @@ public:
   /// returns logical tensor bytes, not the size of the shared allocation.
   [[nodiscard]] std::size_t nbytes() const noexcept;
   [[nodiscard]] bool is_contiguous() const noexcept;
+
+  [[nodiscard]] bool requires_grad() const noexcept;
+  /// A Tensor identity is a leaf when it has no differentiable producing operation.
+  [[nodiscard]] bool is_leaf() const noexcept;
+  [[nodiscard]] bool has_grad() const noexcept;
+  /// Changes gradient tracking on a leaf identity; only floating tensors may enable it.
+  void set_requires_grad(bool enabled = true);
+  /// Returns the accumulated leaf gradient or throws when none exists.
+  [[nodiscard]] Tensor grad() const;
+  /// Clears the accumulated gradient shared by all handles of this leaf identity.
+  void zero_grad();
+  /// Runs first-order reverse-mode differentiation from a one-element loss.
+  void backward();
+  /// Shares value Storage while creating a fresh leaf identity with no graph history.
+  [[nodiscard]] Tensor detach() const;
 
   /// always returns an independent contiguous row-major copy in logical element order.
   [[nodiscard]] Tensor clone() const;
@@ -73,13 +93,17 @@ public:
   }
 
 private:
+  friend struct detail::AutogradAccess;
+
   Tensor(std::shared_ptr<detail::Storage> storage, DType dtype, Shape shape,
          std::vector<Shape::stride_type> strides, std::size_t storage_offset);
 
+  void initialize_autograd();
   void reset_to_empty() noexcept;
   void validate_view_bounds() const;
 
   [[nodiscard]] static std::size_t checked_nbytes(std::size_t numel, DType dtype);
+  [[nodiscard]] Tensor materialize_contiguous() const;
   [[nodiscard]] std::size_t logical_storage_index(std::size_t logical_index) const;
   [[nodiscard]] std::byte* mutable_data() noexcept;
   [[nodiscard]] const std::byte* data() const noexcept;
@@ -99,6 +123,7 @@ private:
   std::vector<Shape::stride_type> strides_;
   std::size_t storage_offset_;
   std::size_t nbytes_;
+  std::shared_ptr<detail::AutogradMeta> autograd_;
 };
 
 void swap(Tensor& left, Tensor& right) noexcept;
@@ -116,3 +141,13 @@ template <typename T> [[nodiscard]] Tensor full(Shape shape, T value) {
 }
 
 } // namespace spar
+
+export namespace spar::detail {
+
+/// Internal operation-recording hook; graph node types remain private to spar.tensor.
+using BackwardFunction = std::function<std::vector<Tensor>(const Tensor&)>;
+
+void record_operation(Tensor& output, std::vector<Tensor> requiring_parents,
+                      BackwardFunction backward);
+
+} // namespace spar::detail
