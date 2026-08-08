@@ -5,9 +5,14 @@ import spar.dtype;
 import spar.shape;
 import spar.storage;
 
-namespace spar::detail {
+export namespace spar {
+class Tensor;
+}
+
+export namespace spar::detail {
 struct AutogradAccess;
 struct AutogradMeta;
+template <typename T> T logical_value(const spar::Tensor& tensor, std::size_t logical_index);
 } // namespace spar::detail
 
 export namespace spar {
@@ -64,6 +69,8 @@ public:
   /// returns a metadata-only view with dimensions and strides reordered by `axes`.
   [[nodiscard]] Tensor permute(std::span<const std::size_t> axes) const;
   [[nodiscard]] Tensor permute(std::initializer_list<std::size_t> axes) const;
+  /// returns a right-aligned metadata-only broadcast view using zero strides.
+  [[nodiscard]] Tensor expand(Shape target_shape) const;
 
   /// returns mutable typed access for a contiguous non-grad identity with a matching dtype.
   template <typename T> [[nodiscard]] std::span<T> span() & {
@@ -99,6 +106,8 @@ public:
 
 private:
   friend struct detail::AutogradAccess;
+  template <typename T>
+  friend T detail::logical_value(const Tensor& tensor, std::size_t logical_index);
 
   Tensor(std::shared_ptr<detail::Storage> storage, DType dtype, Shape shape,
          std::vector<Shape::stride_type> strides, std::size_t storage_offset);
@@ -148,6 +157,20 @@ template <typename T> [[nodiscard]] Tensor full(Shape shape, T value) {
 } // namespace spar
 
 export namespace spar::detail {
+
+template <typename T> T logical_value(const Tensor& tensor, std::size_t logical_index) {
+  if (dtype_of<T>() != tensor.dtype_) {
+    throw std::logic_error{"Internal logical tensor access dtype mismatch"};
+  }
+  if (logical_index >= tensor.numel()) {
+    throw std::out_of_range{"Internal logical tensor index is out of range"};
+  }
+  const auto base{reinterpret_cast<const T*>(tensor.data())};
+  return base[tensor.logical_storage_index(logical_index)];
+}
+
+[[nodiscard]] Shape broadcast_shape(const Shape& left, const Shape& right);
+[[nodiscard]] Tensor reduce_gradient_to_shape(const Tensor& gradient, const Shape& original_shape);
 
 /// Internal operation-recording hook; graph node types remain private to spar.tensor.
 using BackwardFunction = std::function<std::vector<Tensor>(const Tensor&)>;

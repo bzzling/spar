@@ -232,6 +232,37 @@ Tensor Tensor::permute(initializer_list<size_t> axes) const {
   return permute(std::span<const size_t>{axes.begin(), axes.size()});
 }
 
+Tensor Tensor::expand(Shape target_shape) const {
+  if (target_shape.rank() < rank()) {
+    throw invalid_argument{"expand target rank must not be smaller than the input rank"};
+  }
+
+  vector<Shape::stride_type> expanded_strides(target_shape.rank(), 0);
+  const size_t leading_axes{target_shape.rank() - rank()};
+  for (size_t source_axis{0}; source_axis < rank(); ++source_axis) {
+    const size_t target_axis{leading_axes + source_axis};
+    const auto source_extent{shape_[source_axis]};
+    const auto target_extent{target_shape[target_axis]};
+    if (source_extent == target_extent) {
+      expanded_strides[target_axis] = strides_[source_axis];
+    } else if (source_extent == 1) {
+      expanded_strides[target_axis] = 0;
+    } else {
+      throw invalid_argument{"expand dimensions are not broadcast-compatible"};
+    }
+  }
+
+  Tensor output{storage_, dtype_, std::move(target_shape), std::move(expanded_strides),
+                storage_offset_};
+  if (requires_grad()) {
+    const Shape original_shape{shape_};
+    detail::record_operation(output, {*this}, [original_shape](const Tensor& gradient) {
+      return vector<Tensor>{detail::reduce_gradient_to_shape(gradient, original_shape)};
+    });
+  }
+  return output;
+}
+
 Tensor Tensor::detach() const {
   return Tensor{storage_, dtype_, shape_, strides_, storage_offset_};
 }
@@ -342,3 +373,72 @@ Tensor ones(Shape shape, DType dtype) {
 }
 
 } // namespace spar
+
+namespace spar::detail {
+
+Shape broadcast_shape(const Shape& left, const Shape& right) {
+  const size_t result_rank{std::max(left.rank(), right.rank())};
+  vector<Shape::dimension_type> dimensions(result_rank, 1);
+  for (size_t offset{0}; offset < result_rank; ++offset) {
+    const auto left_extent{offset < left.rank() ? left[left.rank() - 1 - offset]
+                                                : Shape::dimension_type{1}};
+    const auto right_extent{offset < right.rank() ? right[right.rank() - 1 - offset]
+                                                  : Shape::dimension_type{1}};
+    Shape::dimension_type result_extent{0};
+    if (left_extent == right_extent) {
+      result_extent = left_extent;
+    } else if (left_extent == 1) {
+      result_extent = right_extent;
+    } else if (right_extent == 1) {
+      result_extent = left_extent;
+    } else {
+      throw invalid_argument{"Tensor shapes are not broadcast-compatible"};
+    }
+    dimensions[result_rank - 1 - offset] = result_extent;
+  }
+  return Shape{std::move(dimensions)};
+}
+
+template <typename T>
+void reduce_gradient_values(const Tensor& gradient, Tensor& result, const Shape& original_shape) {
+  auto result_values{result.span<T>()};
+  const auto result_strides{original_shape.contiguous_strides()};
+  const size_t leading_axes{gradient.rank() - original_shape.rank()};
+  vector<size_t> coordinates(gradient.rank(), 0);
+
+  for (size_t logical_index{0}; logical_index < gradient.numel(); ++logical_index) {
+    size_t remaining{logical_index};
+    for (size_t index{gradient.rank()}; index > 0; --index) {
+      const size_t axis{index - 1};
+      const auto extent{static_cast<size_t>(gradient.shape()[axis])};
+      coordinates[axis] = remaining % extent;
+      remaining /= extent;
+    }
+
+    size_t result_index{0};
+    for (size_t axis{0}; axis < original_shape.rank(); ++axis) {
+      const size_t coordinate{original_shape[axis] == 1 ? 0 : coordinates[leading_axes + axis]};
+      result_index += coordinate * result_strides[axis];
+    }
+    result_values[result_index] += logical_value<T>(gradient, logical_index);
+  }
+}
+
+Tensor reduce_gradient_to_shape(const Tensor& gradient, const Shape& original_shape) {
+  if (gradient.dtype() != DType::Float32 && gradient.dtype() != DType::Float64) {
+    throw logic_error{"Broadcast gradient reduction requires a floating dtype"};
+  }
+  if (gradient.shape() != broadcast_shape(gradient.shape(), original_shape)) {
+    throw logic_error{"Gradient shape cannot be reduced to the requested broadcast parent shape"};
+  }
+
+  Tensor result{zeros(original_shape, gradient.dtype())};
+  if (gradient.dtype() == DType::Float32) {
+    reduce_gradient_values<float>(gradient, result, original_shape);
+  } else {
+    reduce_gradient_values<double>(gradient, result, original_shape);
+  }
+  return result;
+}
+
+} // namespace spar::detail

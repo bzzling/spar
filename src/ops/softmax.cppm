@@ -1,5 +1,6 @@
 export module spar.ops.softmax;
 
+import std;
 export import spar.tensor;
 
 export namespace spar {
@@ -8,5 +9,6 @@ export namespace spar {
 /// NaNs propagate; positive infinities share the probability mass equally;
 /// an input containing only negative infinities produces all NaNs.
 [[nodiscard]] Tensor softmax(const Tensor& input);
+[[nodiscard]] Tensor softmax(const Tensor& input, std::size_t axis);
 
 } // namespace spar
