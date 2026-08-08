@@ -83,6 +83,7 @@ set_target_properties(spar PROPERTIES
 
 target_sources(spar
     PRIVATE
+        src/core/storage.cpp
         src/core/shape.cpp
         src/core/tensor.cpp
         src/core/random.cpp
@@ -97,6 +98,7 @@ target_sources(spar
         BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/src"
         FILES
             src/spar.cppm
+            src/core/storage.cppm
             src/core/dtype.cppm
             src/core/shape.cppm
             src/core/tensor.cppm

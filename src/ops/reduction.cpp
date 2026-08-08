@@ -10,9 +10,12 @@ using namespace std;
 namespace spar {
 namespace {
 
-void validate_reduction_dtype(DType dtype) {
-  if (dtype != DType::Float32 && dtype != DType::Float64) {
+void validate_reduction_input(const Tensor& input) {
+  if (input.dtype() != DType::Float32 && input.dtype() != DType::Float64) {
     throw invalid_argument{"Reductions currently support floating-point dtypes only"};
+  }
+  if (!input.is_contiguous()) {
+    throw invalid_argument{"Reductions currently require contiguous tensors"};
   }
 }
 
@@ -60,7 +63,7 @@ template <typename T> Tensor max_values(const Tensor& input) {
 } // namespace
 
 Tensor sum(const Tensor& input) {
-  validate_reduction_dtype(input.dtype());
+  validate_reduction_input(input);
   switch (input.dtype()) {
   case DType::Float32:
     return sum_values<float>(input);
@@ -74,7 +77,7 @@ Tensor sum(const Tensor& input) {
 }
 
 Tensor mean(const Tensor& input) {
-  validate_reduction_dtype(input.dtype());
+  validate_reduction_input(input);
   if (input.numel() == 0) {
     throw invalid_argument{"mean is undefined for an empty tensor"};
   }
@@ -91,7 +94,7 @@ Tensor mean(const Tensor& input) {
 }
 
 Tensor reduce_max(const Tensor& input) {
-  validate_reduction_dtype(input.dtype());
+  validate_reduction_input(input);
   if (input.numel() == 0) {
     throw invalid_argument{"reduce_max is undefined for an empty tensor"};
   }

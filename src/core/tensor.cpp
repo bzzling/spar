@@ -3,44 +3,42 @@ module spar.tensor;
 import std;
 import spar.dtype;
 import spar.shape;
+import spar.storage;
 
 using namespace std;
 
 namespace spar {
 
 Tensor::Tensor(Shape shape, DType dtype)
-    : dtype_{dtype}, shape_{std::move(shape)}, strides_{shape_.contiguous_strides()},
-      nbytes_{checked_nbytes(shape_.numel(), dtype_)}, storage_{allocate(nbytes_)} {}
-
-Tensor::Tensor(const Tensor& other)
-    : dtype_{other.dtype_}, shape_{other.shape_}, strides_{other.strides_}, nbytes_{other.nbytes_},
-      storage_{allocate(nbytes_)} {
-  if (nbytes_ != 0) {
-    memcpy(storage_.get(), other.storage_.get(), nbytes_);
-  }
+    : storage_{}, dtype_{dtype}, shape_{std::move(shape)}, strides_{shape_.contiguous_strides()},
+      storage_offset_{0}, nbytes_{checked_nbytes(shape_.numel(), dtype_)} {
+  storage_ = make_shared<detail::Storage>(nbytes_);
+  validate_view_bounds();
 }
 
-Tensor& Tensor::operator=(const Tensor& other) {
-  if (this != &other) {
-    Tensor copy{other};
-    swap(copy);
-  }
-  return *this;
+Tensor::Tensor(shared_ptr<detail::Storage> storage, DType dtype, Shape shape,
+               vector<Shape::stride_type> strides, size_t storage_offset)
+    : storage_{std::move(storage)}, dtype_{dtype}, shape_{std::move(shape)},
+      strides_{std::move(strides)}, storage_offset_{storage_offset},
+      nbytes_{checked_nbytes(shape_.numel(), dtype_)} {
+  validate_view_bounds();
 }
 
 Tensor::Tensor(Tensor&& other) noexcept
-    : dtype_{other.dtype_}, shape_{std::move(other.shape_)}, strides_{std::move(other.strides_)},
-      nbytes_{other.nbytes_}, storage_{std::move(other.storage_)} {
+    : storage_{std::move(other.storage_)}, dtype_{other.dtype_}, shape_{std::move(other.shape_)},
+      strides_{std::move(other.strides_)}, storage_offset_{other.storage_offset_},
+      nbytes_{other.nbytes_} {
   other.reset_to_empty();
 }
 
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
   if (this != &other) {
+    storage_ = std::move(other.storage_);
     dtype_ = other.dtype_;
     shape_ = std::move(other.shape_);
     strides_ = std::move(other.strides_);
+    storage_offset_ = other.storage_offset_;
     nbytes_ = other.nbytes_;
-    storage_ = std::move(other.storage_);
     other.reset_to_empty();
   }
   return *this;
@@ -49,23 +47,26 @@ Tensor& Tensor::operator=(Tensor&& other) noexcept {
 Tensor::~Tensor() = default;
 
 void Tensor::reset_to_empty() noexcept {
-  strides_.clear();
-  nbytes_ = 0;
   storage_.reset();
+  strides_.clear();
+  storage_offset_ = 0;
+  nbytes_ = 0;
 }
 
 void Tensor::swap(Tensor& other) noexcept {
   using std::swap;
+  swap(storage_, other.storage_);
   swap(dtype_, other.dtype_);
   swap(shape_, other.shape_);
   swap(strides_, other.strides_);
+  swap(storage_offset_, other.storage_offset_);
   swap(nbytes_, other.nbytes_);
-  swap(storage_, other.storage_);
 }
 
 size_t Tensor::rank() const noexcept {
   return shape_.rank();
 }
+
 const Shape& Tensor::shape() const noexcept {
   return shape_;
 }
@@ -77,11 +78,114 @@ span<const Shape::stride_type> Tensor::strides() const noexcept {
 size_t Tensor::numel() const noexcept {
   return shape_.numel();
 }
+
 DType Tensor::dtype() const noexcept {
   return dtype_;
 }
+
 size_t Tensor::nbytes() const noexcept {
   return nbytes_;
+}
+
+bool Tensor::is_contiguous() const noexcept {
+  if (numel() == 0 || rank() == 0) {
+    return true;
+  }
+
+  size_t expected_stride{1};
+  for (size_t index{rank()}; index > 0; --index) {
+    const size_t axis{index - 1};
+    const auto extent{static_cast<size_t>(shape_[axis])};
+    if (extent > 1 && strides_[axis] != expected_stride) {
+      return false;
+    }
+    expected_stride *= extent;
+  }
+  return true;
+}
+
+Tensor Tensor::clone() const {
+  Tensor output{shape_, dtype_};
+  const auto copy_values = [this, &output]<typename T> {
+    const auto source_base{reinterpret_cast<const T*>(data())};
+    auto destination_values{output.span<T>()};
+    for (size_t index{0}; index < destination_values.size(); ++index) {
+      destination_values[index] = source_base[logical_storage_index(index)];
+    }
+  };
+  switch (dtype_) {
+  case DType::Float32:
+    copy_values.template operator()<float>();
+    break;
+  case DType::Float64:
+    copy_values.template operator()<double>();
+    break;
+  case DType::Int32:
+    copy_values.template operator()<int32_t>();
+    break;
+  case DType::Int64:
+    copy_values.template operator()<int64_t>();
+    break;
+  }
+  return output;
+}
+
+Tensor Tensor::contiguous() const {
+  if (is_contiguous()) {
+    return *this;
+  }
+  return clone();
+}
+
+Tensor Tensor::reshape(Shape new_shape) const {
+  if (!is_contiguous()) {
+    throw invalid_argument{"reshape requires a contiguous tensor"};
+  }
+  if (new_shape.numel() != numel()) {
+    throw invalid_argument{"reshape requires the same number of elements"};
+  }
+  auto new_strides{new_shape.contiguous_strides()};
+  return Tensor{storage_, dtype_, std::move(new_shape), std::move(new_strides), storage_offset_};
+}
+
+Tensor Tensor::transpose(size_t axis_a, size_t axis_b) const {
+  if (axis_a >= rank() || axis_b >= rank()) {
+    throw out_of_range{"transpose axis is out of range"};
+  }
+  vector<Shape::dimension_type> dimensions{shape_.dimensions().begin(), shape_.dimensions().end()};
+  auto new_strides{strides_};
+  std::swap(dimensions[axis_a], dimensions[axis_b]);
+  std::swap(new_strides[axis_a], new_strides[axis_b]);
+  return Tensor{storage_, dtype_, Shape{std::move(dimensions)}, std::move(new_strides),
+                storage_offset_};
+}
+
+Tensor Tensor::permute(std::span<const size_t> axes) const {
+  if (axes.size() != rank()) {
+    throw invalid_argument{"permute requires exactly one entry per tensor axis"};
+  }
+
+  vector<bool> seen(rank(), false);
+  vector<Shape::dimension_type> dimensions(rank());
+  vector<Shape::stride_type> new_strides(rank());
+  for (size_t result_axis{0}; result_axis < axes.size(); ++result_axis) {
+    const size_t source_axis{axes[result_axis]};
+    if (source_axis >= rank()) {
+      throw out_of_range{"permute axis is out of range"};
+    }
+    if (seen[source_axis]) {
+      throw invalid_argument{"permute axes must not contain duplicates"};
+    }
+    seen[source_axis] = true;
+    dimensions[result_axis] = shape_[source_axis];
+    new_strides[result_axis] = strides_[source_axis];
+  }
+  return Tensor{storage_, dtype_, Shape{std::move(dimensions)}, std::move(new_strides),
+                storage_offset_};
+}
+
+Tensor Tensor::permute(initializer_list<size_t> axes) const {
+  return permute(std::span<const size_t>{axes.begin(), axes.size()});
 }
 
 size_t Tensor::checked_nbytes(size_t numel, DType dtype) {
@@ -92,11 +196,59 @@ size_t Tensor::checked_nbytes(size_t numel, DType dtype) {
   return numel * element_size;
 }
 
-unique_ptr<byte[]> Tensor::allocate(size_t nbytes) {
-  if (nbytes == 0) {
-    return {};
+void Tensor::validate_view_bounds() const {
+  if (strides_.size() != rank()) {
+    throw logic_error{"Tensor stride rank does not match shape rank"};
   }
-  return make_unique_for_overwrite<byte[]>(nbytes);
+
+  const size_t element_size{size_of(dtype_)};
+  const size_t storage_elements{storage_ == nullptr ? 0 : storage_->nbytes() / element_size};
+  if (numel() == 0) {
+    if (storage_offset_ > storage_elements) {
+      throw logic_error{"Empty tensor view offset exceeds Storage bounds"};
+    }
+    return;
+  }
+  if (storage_ == nullptr) {
+    throw logic_error{"Non-empty tensor view has no Storage"};
+  }
+
+  size_t maximum_offset{storage_offset_};
+  for (size_t axis{0}; axis < rank(); ++axis) {
+    const auto extent{static_cast<size_t>(shape_[axis])};
+    const size_t steps{extent - 1};
+    if (steps != 0 && strides_[axis] > numeric_limits<size_t>::max() / steps) {
+      throw overflow_error{"Tensor view offset calculation overflow"};
+    }
+    const size_t contribution{steps * strides_[axis]};
+    if (maximum_offset > numeric_limits<size_t>::max() - contribution) {
+      throw overflow_error{"Tensor view offset calculation overflow"};
+    }
+    maximum_offset += contribution;
+  }
+  if (maximum_offset >= storage_elements) {
+    throw logic_error{"Tensor view exceeds Storage bounds"};
+  }
+}
+
+size_t Tensor::logical_storage_index(size_t logical_index) const {
+  size_t storage_index{storage_offset_};
+  for (size_t index{rank()}; index > 0; --index) {
+    const size_t axis{index - 1};
+    const auto extent{static_cast<size_t>(shape_[axis])};
+    const size_t coordinate{logical_index % extent};
+    logical_index /= extent;
+    storage_index += coordinate * strides_[axis];
+  }
+  return storage_index;
+}
+
+byte* Tensor::mutable_data() noexcept {
+  return storage_ == nullptr ? nullptr : storage_->data();
+}
+
+const byte* Tensor::data() const noexcept {
+  return storage_ == nullptr ? nullptr : storage_->data();
 }
 
 void swap(Tensor& left, Tensor& right) noexcept {

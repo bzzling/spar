@@ -23,6 +23,9 @@ void validate_matmul_inputs(const Tensor& a, const Tensor& b) {
   if (a.shape()[1] != b.shape()[0]) {
     throw invalid_argument{"matmul inner dimensions must match"};
   }
+  if (!a.is_contiguous() || !b.is_contiguous()) {
+    throw invalid_argument{"matmul currently requires contiguous tensors"};
+  }
 }
 
 template <typename T> Tensor matmul_values(const Tensor& a, const Tensor& b) {

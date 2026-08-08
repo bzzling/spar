@@ -9,9 +9,12 @@ using namespace std;
 namespace spar {
 namespace {
 
-void validate_unary_dtype(DType dtype) {
-  if (dtype != DType::Float32 && dtype != DType::Float64) {
+void validate_unary_input(const Tensor& input) {
+  if (input.dtype() != DType::Float32 && input.dtype() != DType::Float64) {
     throw invalid_argument{"Unary operations currently support floating-point dtypes only"};
+  }
+  if (!input.is_contiguous()) {
+    throw invalid_argument{"Unary operations currently require contiguous tensors"};
   }
 }
 
@@ -28,7 +31,7 @@ Tensor apply_unary(const Tensor& input, Operation operation) {
 }
 
 template <typename Operation> Tensor dispatch_unary(const Tensor& input, Operation operation) {
-  validate_unary_dtype(input.dtype());
+  validate_unary_input(input);
   switch (input.dtype()) {
   case DType::Float32:
     return apply_unary<float>(input, operation);

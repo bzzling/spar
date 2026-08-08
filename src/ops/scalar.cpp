@@ -9,15 +9,17 @@ using namespace std;
 namespace spar {
 namespace {
 
-void validate_scalar_dtype(DType dtype) {
-  if (dtype != DType::Float32 && dtype != DType::Float64) {
+void validate_scalar_input(const Tensor& input) {
+  if (input.dtype() != DType::Float32 && input.dtype() != DType::Float64) {
     throw invalid_argument{"Scalar operations currently support floating-point dtypes only"};
+  }
+  if (!input.is_contiguous()) {
+    throw invalid_argument{"Scalar operations currently require contiguous tensors"};
   }
 }
 
 template <typename T, typename Operation>
-Tensor apply_scalar(const Tensor& input, double value, Operation operation) {
-  const T scalar{static_cast<T>(value)};
+Tensor apply_scalar(const Tensor& input, T scalar, Operation operation) {
   Tensor output{input.shape(), input.dtype()};
   const auto input_values{input.span<T>()};
   auto output_values{output.span<T>()};
@@ -30,10 +32,15 @@ Tensor apply_scalar(const Tensor& input, double value, Operation operation) {
 
 template <typename Operation>
 Tensor dispatch_scalar(const Tensor& input, double value, Operation operation) {
-  validate_scalar_dtype(input.dtype());
+  validate_scalar_input(input);
   switch (input.dtype()) {
-  case DType::Float32:
-    return apply_scalar<float>(input, value, operation);
+  case DType::Float32: {
+    constexpr double float_limit{static_cast<double>(numeric_limits<float>::max())};
+    if (isfinite(value) && (value > float_limit || value < -float_limit)) {
+      throw overflow_error{"Scalar value is outside the finite Float32 range"};
+    }
+    return apply_scalar<float>(input, static_cast<float>(value), operation);
+  }
   case DType::Float64:
     return apply_scalar<double>(input, value, operation);
   case DType::Int32:

@@ -16,6 +16,9 @@ void validate_softmax_input(const Tensor& input) {
   if (input.numel() == 0) {
     throw invalid_argument{"softmax is undefined for an empty tensor"};
   }
+  if (!input.is_contiguous()) {
+    throw invalid_argument{"softmax currently requires a contiguous tensor"};
+  }
 }
 
 template <typename T> Tensor softmax_values(const Tensor& input) {

@@ -19,6 +19,9 @@ void validate_binary_inputs(const Tensor& a, const Tensor& b) {
   if (a.dtype() != DType::Float32 && a.dtype() != DType::Float64) {
     throw invalid_argument{"Elementwise operations currently support floating-point dtypes only"};
   }
+  if (!a.is_contiguous() || !b.is_contiguous()) {
+    throw invalid_argument{"Elementwise operations currently require contiguous tensors"};
+  }
 }
 
 template <typename T> Tensor add_values(const Tensor& a, const Tensor& b) {
