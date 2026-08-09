@@ -115,9 +115,6 @@ target_sources(spar
         src/data/batch_iterator.cpp
         src/training/gradients.cpp
         src/training/schedule.cpp
-        src/leda/config.cpp
-        src/leda/model.cpp
-        src/leda/pretraining.cpp
         src/optim/adamw.cpp
     PUBLIC
         FILE_SET spar_modules TYPE CXX_MODULES
@@ -162,10 +159,6 @@ target_sources(spar
             src/training/training.cppm
             src/training/gradients.cppm
             src/training/schedule.cppm
-            src/leda/leda.cppm
-            src/leda/config.cppm
-            src/leda/model.cppm
-            src/leda/pretraining.cppm
             src/optim/optim.cppm
             src/optim/adamw.cppm
 )
