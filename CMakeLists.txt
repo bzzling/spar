@@ -111,6 +111,8 @@ target_sources(spar
         src/checkpoint/checkpoint.cpp
         src/tokenizer/byte_bpe.cpp
         src/tokenizer/artifact.cpp
+        src/data/tokenized_corpus.cpp
+        src/data/batch_iterator.cpp
         src/optim/adamw.cpp
     PUBLIC
         FILE_SET spar_modules TYPE CXX_MODULES
@@ -149,6 +151,9 @@ target_sources(spar
             src/tokenizer/tokenizer.cppm
             src/tokenizer/byte_bpe.cppm
             src/tokenizer/artifact.cppm
+            src/data/data.cppm
+            src/data/tokenized_corpus.cppm
+            src/data/batch_iterator.cppm
             src/optim/optim.cppm
             src/optim/adamw.cppm
 )
