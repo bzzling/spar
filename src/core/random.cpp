@@ -11,6 +11,14 @@ namespace spar {
 
 Random::Random(uint64_t seed) noexcept : state_{seed} {}
 
+uint64_t Random::state() const noexcept {
+  return state_;
+}
+
+void Random::set_state(uint64_t state) noexcept {
+  state_ = state;
+}
+
 uint64_t Random::next_u64() noexcept {
   state_ += 0x9E3779B97F4A7C15ULL;
   auto value{state_};

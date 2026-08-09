@@ -142,4 +142,53 @@ double AdamW::weight_decay() const noexcept {
   return weight_decay_;
 }
 
+bool AdamW::tracks(const nn::Parameter& parameter) const noexcept {
+  return ranges::any_of(entries_, [&parameter](const Entry& entry) {
+    return entry.parameter.shares_identity_with(parameter);
+  });
+}
+
+optional<AdamWParameterState> AdamW::parameter_state(const nn::Parameter& parameter) const {
+  const auto iterator{ranges::find_if(entries_, [&parameter](const Entry& entry) {
+    return entry.parameter.shares_identity_with(parameter);
+  })};
+  if (iterator == entries_.end()) {
+    throw invalid_argument{"AdamW does not track the requested Parameter"};
+  }
+  if (!iterator->state) {
+    return nullopt;
+  }
+  return AdamWParameterState{iterator->state->first_moment.detach().clone(),
+                             iterator->state->second_moment.detach().clone(),
+                             iterator->state->step};
+}
+
+void AdamW::set_parameter_state(const nn::Parameter& parameter,
+                                optional<AdamWParameterState> state) {
+  const auto iterator{ranges::find_if(entries_, [&parameter](const Entry& entry) {
+    return entry.parameter.shares_identity_with(parameter);
+  })};
+  if (iterator == entries_.end()) {
+    throw invalid_argument{"AdamW does not track the requested Parameter"};
+  }
+  if (!state) {
+    iterator->state.reset();
+    return;
+  }
+  if (state->step == 0) {
+    throw invalid_argument{"AdamW restored state step must be at least one"};
+  }
+  for (const Tensor* moment : {&state->first_moment, &state->second_moment}) {
+    if (moment->shape() != parameter.tensor().shape() ||
+        moment->dtype() != parameter.tensor().dtype()) {
+      throw invalid_argument{"AdamW restored moment shape or dtype mismatch"};
+    }
+    if (moment->dtype() != DType::Float32 && moment->dtype() != DType::Float64) {
+      throw invalid_argument{"AdamW restored moments must be floating point"};
+    }
+  }
+  iterator->state.emplace(state->first_moment.detach().clone(),
+                          state->second_moment.detach().clone(), state->step);
+}
+
 } // namespace spar::optim

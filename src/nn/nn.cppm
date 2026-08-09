@@ -11,3 +11,4 @@ export import spar.nn.mlp;
 export import spar.nn.transformer;
 export import spar.nn.decoder;
 export import spar.nn.parameters;
+export import spar.nn.state;

@@ -5,6 +5,12 @@ export import spar.nn.parameter;
 
 export namespace spar::optim {
 
+struct AdamWParameterState final {
+  Tensor first_moment;
+  Tensor second_moment;
+  std::uint64_t step;
+};
+
 class AdamW {
 public:
   explicit AdamW(std::vector<nn::Parameter> parameters = {}, double learning_rate = 1.0e-3,
@@ -26,6 +32,12 @@ public:
   [[nodiscard]] double beta2() const noexcept;
   [[nodiscard]] double epsilon() const noexcept;
   [[nodiscard]] double weight_decay() const noexcept;
+
+  [[nodiscard]] bool tracks(const nn::Parameter& parameter) const noexcept;
+  [[nodiscard]] std::optional<AdamWParameterState>
+  parameter_state(const nn::Parameter& parameter) const;
+  void set_parameter_state(const nn::Parameter& parameter,
+                           std::optional<AdamWParameterState> state);
 
 private:
   struct State final {

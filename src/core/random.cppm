@@ -13,6 +13,9 @@ public:
   /// creates a generator with the given seed.
   explicit Random(std::uint64_t seed) noexcept;
 
+  [[nodiscard]] std::uint64_t state() const noexcept;
+  void set_state(std::uint64_t state) noexcept;
+
   /// advances and returns the next SplitMix64 output.
   [[nodiscard]] std::uint64_t next_u64() noexcept;
   /// returns a reproducible float in [0, 1).
