@@ -104,6 +104,8 @@ target_sources(spar
         src/nn/attention.cpp
         src/nn/mlp.cpp
         src/nn/transformer.cpp
+        src/nn/parameters.cpp
+        src/optim/adamw.cpp
     PUBLIC
         FILE_SET spar_modules TYPE CXX_MODULES
         BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -132,6 +134,9 @@ target_sources(spar
             src/nn/attention.cppm
             src/nn/mlp.cppm
             src/nn/transformer.cppm
+            src/nn/parameters.cppm
+            src/optim/optim.cppm
+            src/optim/adamw.cppm
 )
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")

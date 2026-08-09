@@ -23,6 +23,10 @@ bool Parameter::requires_grad() const noexcept {
   return tensor_.requires_grad();
 }
 
+bool Parameter::shares_identity_with(const Parameter& other) const noexcept {
+  return detail::shares_autograd_identity(tensor_, other.tensor_);
+}
+
 void Parameter::set_requires_grad(bool enabled) {
   tensor_.set_requires_grad(enabled);
 }

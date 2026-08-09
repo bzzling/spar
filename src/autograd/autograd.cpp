@@ -60,6 +60,12 @@ void record_operation(Tensor& output, vector<Tensor> requiring_parents, Backward
       make_shared<AutogradNode>(AutogradNode{std::move(edges), std::move(backward)});
 }
 
+bool shares_autograd_identity(const Tensor& left, const Tensor& right) noexcept {
+  const auto& left_meta{AutogradAccess::meta(left)};
+  const auto& right_meta{AutogradAccess::meta(right)};
+  return left_meta != nullptr && left_meta == right_meta;
+}
+
 } // namespace spar::detail
 
 namespace spar {

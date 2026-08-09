@@ -178,4 +178,7 @@ using BackwardFunction = std::function<std::vector<Tensor>(const Tensor&)>;
 void record_operation(Tensor& output, std::vector<Tensor> requiring_parents,
                       BackwardFunction backward);
 
+/// Internal semantic-identity predicate used by value-semantic Parameter handles.
+[[nodiscard]] bool shares_autograd_identity(const Tensor& left, const Tensor& right) noexcept;
+
 } // namespace spar::detail

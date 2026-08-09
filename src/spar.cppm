@@ -6,3 +6,4 @@ export import spar.tensor;
 export import spar.random;
 export import spar.ops;
 export import spar.nn;
+export import spar.optim;

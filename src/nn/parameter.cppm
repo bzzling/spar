@@ -13,6 +13,7 @@ public:
   [[nodiscard]] const Tensor& tensor() const noexcept;
 
   [[nodiscard]] bool requires_grad() const noexcept;
+  [[nodiscard]] bool shares_identity_with(const Parameter& other) const noexcept;
   void set_requires_grad(bool enabled);
   [[nodiscard]] bool has_grad() const noexcept;
   [[nodiscard]] Tensor grad() const;
