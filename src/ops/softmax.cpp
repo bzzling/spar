@@ -345,10 +345,10 @@ LogSoftmaxResult log_softmax_values(const Tensor& input, optional<size_t> axis) 
         const size_t logical{(outer_index * axis_extent + axis_index) * inner + inner_index};
         exponential_sum += exp(detail::logical_value<T>(input, logical) - maximum);
       }
-      const T log_denominator{maximum + log(exponential_sum)};
+      const T log_sum{log(exponential_sum)};
       for (size_t axis_index{0}; axis_index < axis_extent; ++axis_index) {
         const size_t logical{(outer_index * axis_extent + axis_index) * inner + inner_index};
-        values[logical] = detail::logical_value<T>(input, logical) - log_denominator;
+        values[logical] = (detail::logical_value<T>(input, logical) - maximum) - log_sum;
       }
     }
   }
