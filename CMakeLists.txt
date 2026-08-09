@@ -100,6 +100,8 @@ target_sources(spar
         src/nn/embedding.cpp
         src/nn/rmsnorm.cpp
         src/nn/functional.cpp
+        src/nn/rope.cpp
+        src/nn/attention.cpp
     PUBLIC
         FILE_SET spar_modules TYPE CXX_MODULES
         BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -124,6 +126,8 @@ target_sources(spar
             src/nn/embedding.cppm
             src/nn/rmsnorm.cppm
             src/nn/functional.cppm
+            src/nn/rope.cppm
+            src/nn/attention.cppm
 )
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")

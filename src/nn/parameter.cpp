@@ -15,10 +15,6 @@ Parameter::Parameter(Tensor initial_value) : tensor_{initial_value.detach().clon
   tensor_.set_requires_grad();
 }
 
-Tensor& Parameter::tensor() noexcept {
-  return tensor_;
-}
-
 const Tensor& Parameter::tensor() const noexcept {
   return tensor_;
 }

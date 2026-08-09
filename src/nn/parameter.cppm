@@ -10,7 +10,6 @@ class Parameter {
 public:
   explicit Parameter(Tensor initial_value);
 
-  [[nodiscard]] Tensor& tensor() noexcept;
   [[nodiscard]] const Tensor& tensor() const noexcept;
 
   [[nodiscard]] bool requires_grad() const noexcept;
