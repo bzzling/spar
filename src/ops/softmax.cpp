@@ -284,4 +284,156 @@ Tensor softmax(const Tensor& input, size_t axis) {
   return output;
 }
 
+namespace {
+
+struct LogSoftmaxResult final {
+  Tensor output;
+  vector<unsigned char> undefined_slices;
+};
+
+template <typename T>
+LogSoftmaxResult log_softmax_values(const Tensor& input, optional<size_t> axis) {
+  const size_t axis_extent{axis ? static_cast<size_t>(input.shape()[*axis]) : input.numel()};
+  size_t outer{1};
+  size_t inner{1};
+  if (axis) {
+    for (size_t index{0}; index < *axis; ++index) {
+      outer *= static_cast<size_t>(input.shape()[index]);
+    }
+    for (size_t index{*axis + 1}; index < input.rank(); ++index) {
+      inner *= static_cast<size_t>(input.shape()[index]);
+    }
+  }
+
+  Tensor output{input.shape(), input.dtype()};
+  auto values{output.span<T>()};
+  vector<unsigned char> undefined(outer * inner, 0);
+  const T infinity{numeric_limits<T>::infinity()};
+  const T nan{numeric_limits<T>::quiet_NaN()};
+  for (size_t outer_index{0}; outer_index < outer; ++outer_index) {
+    for (size_t inner_index{0}; inner_index < inner; ++inner_index) {
+      const size_t slice{outer_index * inner + inner_index};
+      size_t positive_infinities{0};
+      bool contains_nan{false};
+      T maximum{-infinity};
+      for (size_t axis_index{0}; axis_index < axis_extent; ++axis_index) {
+        const size_t logical{(outer_index * axis_extent + axis_index) * inner + inner_index};
+        const T value{detail::logical_value<T>(input, logical)};
+        contains_nan = contains_nan || isnan(value);
+        positive_infinities += value == infinity ? 1 : 0;
+        maximum = value > maximum ? value : maximum;
+      }
+      if (contains_nan || maximum == -infinity) {
+        undefined[slice] = 1;
+        for (size_t axis_index{0}; axis_index < axis_extent; ++axis_index) {
+          values[(outer_index * axis_extent + axis_index) * inner + inner_index] = nan;
+        }
+        continue;
+      }
+      if (positive_infinities != 0) {
+        undefined[slice] = 1;
+        const T at_infinity{-log(static_cast<T>(positive_infinities))};
+        for (size_t axis_index{0}; axis_index < axis_extent; ++axis_index) {
+          const size_t logical{(outer_index * axis_extent + axis_index) * inner + inner_index};
+          values[logical] =
+              detail::logical_value<T>(input, logical) == infinity ? at_infinity : -infinity;
+        }
+        continue;
+      }
+      T exponential_sum{0};
+      for (size_t axis_index{0}; axis_index < axis_extent; ++axis_index) {
+        const size_t logical{(outer_index * axis_extent + axis_index) * inner + inner_index};
+        exponential_sum += exp(detail::logical_value<T>(input, logical) - maximum);
+      }
+      const T log_denominator{maximum + log(exponential_sum)};
+      for (size_t axis_index{0}; axis_index < axis_extent; ++axis_index) {
+        const size_t logical{(outer_index * axis_extent + axis_index) * inner + inner_index};
+        values[logical] = detail::logical_value<T>(input, logical) - log_denominator;
+      }
+    }
+  }
+  return {std::move(output), std::move(undefined)};
+}
+
+template <typename T>
+Tensor log_softmax_gradient(const Tensor& gradient, const Tensor& saved_output,
+                            optional<size_t> axis, span<const unsigned char> undefined) {
+  const size_t axis_extent{axis ? static_cast<size_t>(saved_output.shape()[*axis])
+                                : saved_output.numel()};
+  size_t outer{1};
+  size_t inner{1};
+  if (axis) {
+    for (size_t index{0}; index < *axis; ++index) {
+      outer *= static_cast<size_t>(saved_output.shape()[index]);
+    }
+    for (size_t index{*axis + 1}; index < saved_output.rank(); ++index) {
+      inner *= static_cast<size_t>(saved_output.shape()[index]);
+    }
+  }
+  const auto upstream{gradient.span<T>()};
+  const auto log_probabilities{saved_output.span<T>()};
+  Tensor contribution{saved_output.shape(), saved_output.dtype()};
+  auto result{contribution.span<T>()};
+  const T nan{numeric_limits<T>::quiet_NaN()};
+  for (size_t outer_index{0}; outer_index < outer; ++outer_index) {
+    for (size_t inner_index{0}; inner_index < inner; ++inner_index) {
+      const size_t slice{outer_index * inner + inner_index};
+      T sum_gradient{0};
+      for (size_t axis_index{0}; axis_index < axis_extent; ++axis_index) {
+        const size_t logical{(outer_index * axis_extent + axis_index) * inner + inner_index};
+        sum_gradient += upstream[logical];
+      }
+      for (size_t axis_index{0}; axis_index < axis_extent; ++axis_index) {
+        const size_t logical{(outer_index * axis_extent + axis_index) * inner + inner_index};
+        result[logical] = undefined[slice] != 0
+                              ? nan
+                              : upstream[logical] - exp(log_probabilities[logical]) * sum_gradient;
+      }
+    }
+  }
+  return contribution;
+}
+
+Tensor log_softmax_impl(const Tensor& input, optional<size_t> axis) {
+  if (input.dtype() != DType::Float32 && input.dtype() != DType::Float64) {
+    throw invalid_argument{"log_softmax supports floating-point dtypes only"};
+  }
+  if (input.numel() == 0) {
+    throw invalid_argument{"log_softmax is undefined for an empty tensor"};
+  }
+  if (axis && *axis >= input.rank()) {
+    throw out_of_range{"log_softmax axis is out of range"};
+  }
+  LogSoftmaxResult calculated{input.dtype() == DType::Float32
+                                  ? log_softmax_values<float>(input, axis)
+                                  : log_softmax_values<double>(input, axis)};
+  Tensor output{std::move(calculated.output)};
+  if (input.requires_grad()) {
+    const Tensor saved_output{output.detach().clone()};
+    const DType dtype{input.dtype()};
+    detail::record_operation(
+        output, {input},
+        [saved_output, axis, undefined = std::move(calculated.undefined_slices),
+         dtype](const Tensor& gradient) {
+          if (dtype == DType::Float32) {
+            return vector<Tensor>{
+                log_softmax_gradient<float>(gradient, saved_output, axis, undefined)};
+          }
+          return vector<Tensor>{
+              log_softmax_gradient<double>(gradient, saved_output, axis, undefined)};
+        });
+  }
+  return output;
+}
+
+} // namespace
+
+Tensor log_softmax(const Tensor& input) {
+  return log_softmax_impl(input, nullopt);
+}
+
+Tensor log_softmax(const Tensor& input, size_t axis) {
+  return log_softmax_impl(input, axis);
+}
+
 } // namespace spar

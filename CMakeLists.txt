@@ -106,6 +106,7 @@ target_sources(spar
         src/nn/transformer.cpp
         src/nn/decoder.cpp
         src/nn/parameters.cpp
+        src/loss/cross_entropy.cpp
         src/optim/adamw.cpp
     PUBLIC
         FILE_SET spar_modules TYPE CXX_MODULES
@@ -137,6 +138,8 @@ target_sources(spar
             src/nn/transformer.cppm
             src/nn/decoder.cppm
             src/nn/parameters.cppm
+            src/loss/loss.cppm
+            src/loss/cross_entropy.cppm
             src/optim/optim.cppm
             src/optim/adamw.cppm
 )

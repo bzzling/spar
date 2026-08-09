@@ -11,4 +11,9 @@ export namespace spar {
 [[nodiscard]] Tensor softmax(const Tensor& input);
 [[nodiscard]] Tensor softmax(const Tensor& input, std::size_t axis);
 
+/// Computes stable log probabilities. Slices containing NaN, positive infinity,
+/// or only negative infinities have deliberately undefined (NaN) derivatives.
+[[nodiscard]] Tensor log_softmax(const Tensor& input);
+[[nodiscard]] Tensor log_softmax(const Tensor& input, std::size_t axis);
+
 } // namespace spar
