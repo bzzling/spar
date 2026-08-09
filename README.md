@@ -4,8 +4,6 @@ Spar is a dependency-free C++23 deep-learning framework built from scratch, with
 on training and running Transformer language models. Its CPU implementation is a correctness-first
 reference for later custom acceleration work.
 
-Leda is a language model built using Spar.
-
 ## Current capabilities
 
 - C++23 modules and an `import spar;` umbrella API
