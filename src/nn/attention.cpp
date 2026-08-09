@@ -3,6 +3,7 @@ module spar.nn.attention;
 import std;
 import spar.dtype;
 import spar.nn.linear;
+import spar.nn.rmsnorm;
 import spar.nn.rope;
 import spar.ops.elementwise;
 import spar.ops.matmul;
@@ -130,7 +131,8 @@ Tensor scaled_dot_product_attention(const Tensor& query, const Tensor& key, cons
 SelfAttention::Configuration SelfAttention::validate_configuration(size_t model_dim,
                                                                    size_t num_query_heads,
                                                                    size_t num_kv_heads, DType dtype,
-                                                                   double rope_theta) {
+                                                                   double rope_theta, bool qk_norm,
+                                                                   double qk_norm_epsilon) {
   if (model_dim == 0 || num_query_heads == 0 || num_kv_heads == 0) {
     throw invalid_argument{"SelfAttention dimensions must be positive"};
   }
@@ -150,14 +152,19 @@ SelfAttention::Configuration SelfAttention::validate_configuration(size_t model_
   if (!isfinite(rope_theta) || rope_theta <= 0.0) {
     throw invalid_argument{"SelfAttention rope_theta must be finite and positive"};
   }
-  return Configuration{model_dim, num_query_heads, num_kv_heads, head_dim, rope_theta};
+  if (!isfinite(qk_norm_epsilon) || qk_norm_epsilon <= 0.0) {
+    throw invalid_argument{"SelfAttention qk_norm_epsilon must be finite and positive"};
+  }
+  return Configuration{model_dim,  num_query_heads, num_kv_heads,   head_dim,
+                       rope_theta, qk_norm,         qk_norm_epsilon};
 }
 
 SelfAttention::SelfAttention(size_t model_dim, size_t num_query_heads, size_t num_kv_heads,
-                             DType dtype, Random& random, bool bias, double rope_theta)
-    : SelfAttention{
-          validate_configuration(model_dim, num_query_heads, num_kv_heads, dtype, rope_theta),
-          dtype, random, bias} {}
+                             DType dtype, Random& random, bool bias, double rope_theta,
+                             bool qk_norm, double qk_norm_epsilon)
+    : SelfAttention{validate_configuration(model_dim, num_query_heads, num_kv_heads, dtype,
+                                           rope_theta, qk_norm, qk_norm_epsilon),
+                    dtype, random, bias} {}
 
 SelfAttention::SelfAttention(Configuration configuration, DType dtype, Random& random, bool bias)
     : model_dim_{configuration.model_dim}, num_query_heads_{configuration.num_query_heads},
@@ -165,7 +172,12 @@ SelfAttention::SelfAttention(Configuration configuration, DType dtype, Random& r
       rope_theta_{configuration.rope_theta}, q_proj_{model_dim_, model_dim_, dtype, random, bias},
       k_proj_{model_dim_, num_kv_heads_ * head_dim_, dtype, random, bias},
       v_proj_{model_dim_, num_kv_heads_ * head_dim_, dtype, random, bias},
-      out_proj_{model_dim_, model_dim_, dtype, random, bias} {}
+      out_proj_{model_dim_, model_dim_, dtype, random, bias} {
+  if (configuration.qk_norm) {
+    q_norm_.emplace(head_dim_, dtype, configuration.qk_norm_epsilon);
+    k_norm_.emplace(head_dim_, dtype, configuration.qk_norm_epsilon);
+  }
+}
 
 Tensor SelfAttention::forward(const Tensor& input, size_t start_position) const {
   if (input.rank() != 3) {
@@ -183,16 +195,18 @@ Tensor SelfAttention::forward(const Tensor& input, size_t start_position) const 
   const auto dimension = [](size_t value) { return static_cast<Shape::dimension_type>(value); };
   const auto batch{input.shape()[0]};
   const auto sequence{input.shape()[1]};
-  const Tensor query{apply_rope(
+  const Tensor query_heads{
       q_proj_.forward(input)
           .reshape(Shape{batch, sequence, dimension(num_query_heads_), dimension(head_dim_)})
-          .permute({0, 2, 1, 3}),
-      start_position, rope_theta_)};
-  const Tensor key{apply_rope(
+          .permute({0, 2, 1, 3})};
+  const Tensor key_heads{
       k_proj_.forward(input)
           .reshape(Shape{batch, sequence, dimension(num_kv_heads_), dimension(head_dim_)})
-          .permute({0, 2, 1, 3}),
-      start_position, rope_theta_)};
+          .permute({0, 2, 1, 3})};
+  const Tensor normalized_query{q_norm_ ? q_norm_->forward(query_heads.contiguous()) : query_heads};
+  const Tensor normalized_key{k_norm_ ? k_norm_->forward(key_heads.contiguous()) : key_heads};
+  const Tensor query{apply_rope(normalized_query, start_position, rope_theta_)};
+  const Tensor key{apply_rope(normalized_key, start_position, rope_theta_)};
   const Tensor value{
       v_proj_.forward(input)
           .reshape(Shape{batch, sequence, dimension(num_kv_heads_), dimension(head_dim_)})
@@ -218,6 +232,21 @@ size_t SelfAttention::head_dim() const noexcept {
 }
 double SelfAttention::rope_theta() const noexcept {
   return rope_theta_;
+}
+bool SelfAttention::has_qk_norm() const noexcept {
+  return q_norm_.has_value();
+}
+RMSNorm* SelfAttention::q_norm() noexcept {
+  return q_norm_ ? &*q_norm_ : nullptr;
+}
+const RMSNorm* SelfAttention::q_norm() const noexcept {
+  return q_norm_ ? &*q_norm_ : nullptr;
+}
+RMSNorm* SelfAttention::k_norm() noexcept {
+  return k_norm_ ? &*k_norm_ : nullptr;
+}
+const RMSNorm* SelfAttention::k_norm() const noexcept {
+  return k_norm_ ? &*k_norm_ : nullptr;
 }
 Linear& SelfAttention::q_proj() noexcept {
   return q_proj_;

@@ -3,6 +3,7 @@ export module spar.nn.attention;
 import std;
 export import spar.dtype;
 export import spar.nn.linear;
+export import spar.nn.rmsnorm;
 export import spar.random;
 export import spar.tensor;
 
@@ -14,7 +15,8 @@ export namespace spar::nn {
 class SelfAttention {
 public:
   SelfAttention(std::size_t model_dim, std::size_t num_query_heads, std::size_t num_kv_heads,
-                DType dtype, Random& random, bool bias = false, double rope_theta = 10000.0);
+                DType dtype, Random& random, bool bias = false, double rope_theta = 10000.0,
+                bool qk_norm = false, double qk_norm_epsilon = 1.0e-6);
 
   [[nodiscard]] Tensor forward(const Tensor& input, std::size_t start_position = 0) const;
 
@@ -23,6 +25,12 @@ public:
   [[nodiscard]] std::size_t num_kv_heads() const noexcept;
   [[nodiscard]] std::size_t head_dim() const noexcept;
   [[nodiscard]] double rope_theta() const noexcept;
+  [[nodiscard]] bool has_qk_norm() const noexcept;
+
+  [[nodiscard]] RMSNorm* q_norm() noexcept;
+  [[nodiscard]] const RMSNorm* q_norm() const noexcept;
+  [[nodiscard]] RMSNorm* k_norm() noexcept;
+  [[nodiscard]] const RMSNorm* k_norm() const noexcept;
 
   [[nodiscard]] Linear& q_proj() noexcept;
   [[nodiscard]] const Linear& q_proj() const noexcept;
@@ -40,13 +48,16 @@ private:
     std::size_t num_kv_heads;
     std::size_t head_dim;
     double rope_theta;
+    bool qk_norm;
+    double qk_norm_epsilon;
   };
 
   SelfAttention(Configuration configuration, DType dtype, Random& random, bool bias);
   [[nodiscard]] static Configuration validate_configuration(std::size_t model_dim,
                                                             std::size_t num_query_heads,
                                                             std::size_t num_kv_heads, DType dtype,
-                                                            double rope_theta);
+                                                            double rope_theta, bool qk_norm,
+                                                            double qk_norm_epsilon);
 
   std::size_t model_dim_;
   std::size_t num_query_heads_;
@@ -57,6 +68,8 @@ private:
   Linear k_proj_;
   Linear v_proj_;
   Linear out_proj_;
+  std::optional<RMSNorm> q_norm_;
+  std::optional<RMSNorm> k_norm_;
 };
 
 } // namespace spar::nn

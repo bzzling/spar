@@ -7,3 +7,5 @@ export import spar.nn.rmsnorm;
 export import spar.nn.functional;
 export import spar.nn.rope;
 export import spar.nn.attention;
+export import spar.nn.mlp;
+export import spar.nn.transformer;
