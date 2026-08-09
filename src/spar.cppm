@@ -8,4 +8,5 @@ export import spar.ops;
 export import spar.nn;
 export import spar.loss;
 export import spar.checkpoint;
+export import spar.tokenizer;
 export import spar.optim;

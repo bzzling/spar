@@ -109,6 +109,8 @@ target_sources(spar
         src/nn/state.cpp
         src/loss/cross_entropy.cpp
         src/checkpoint/checkpoint.cpp
+        src/tokenizer/byte_bpe.cpp
+        src/tokenizer/artifact.cpp
         src/optim/adamw.cpp
     PUBLIC
         FILE_SET spar_modules TYPE CXX_MODULES
@@ -144,6 +146,9 @@ target_sources(spar
             src/loss/loss.cppm
             src/loss/cross_entropy.cppm
             src/checkpoint/checkpoint.cppm
+            src/tokenizer/tokenizer.cppm
+            src/tokenizer/byte_bpe.cppm
+            src/tokenizer/artifact.cppm
             src/optim/optim.cppm
             src/optim/adamw.cppm
 )
