@@ -2,6 +2,7 @@ export module spar.nn.parameters;
 
 import std;
 export import spar.nn.attention;
+export import spar.nn.decoder;
 export import spar.nn.embedding;
 export import spar.nn.linear;
 export import spar.nn.mlp;
@@ -22,6 +23,7 @@ struct NamedParameter final {
 [[nodiscard]] std::vector<NamedParameter> named_parameters(SelfAttention& layer);
 [[nodiscard]] std::vector<NamedParameter> named_parameters(SwiGLUMLP& layer);
 [[nodiscard]] std::vector<NamedParameter> named_parameters(TransformerBlock& layer);
+[[nodiscard]] std::vector<NamedParameter> named_parameters(DecoderLM& model);
 
 [[nodiscard]] std::vector<Parameter> parameters(Linear& layer);
 [[nodiscard]] std::vector<Parameter> parameters(Embedding& layer);
@@ -29,6 +31,7 @@ struct NamedParameter final {
 [[nodiscard]] std::vector<Parameter> parameters(SelfAttention& layer);
 [[nodiscard]] std::vector<Parameter> parameters(SwiGLUMLP& layer);
 [[nodiscard]] std::vector<Parameter> parameters(TransformerBlock& layer);
+[[nodiscard]] std::vector<Parameter> parameters(DecoderLM& model);
 
 void zero_grad(Linear& layer);
 void zero_grad(Embedding& layer);
@@ -36,5 +39,6 @@ void zero_grad(RMSNorm& layer);
 void zero_grad(SelfAttention& layer);
 void zero_grad(SwiGLUMLP& layer);
 void zero_grad(TransformerBlock& layer);
+void zero_grad(DecoderLM& model);
 
 } // namespace spar::nn

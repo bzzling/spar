@@ -104,6 +104,7 @@ target_sources(spar
         src/nn/attention.cpp
         src/nn/mlp.cpp
         src/nn/transformer.cpp
+        src/nn/decoder.cpp
         src/nn/parameters.cpp
         src/optim/adamw.cpp
     PUBLIC
@@ -134,6 +135,7 @@ target_sources(spar
             src/nn/attention.cppm
             src/nn/mlp.cppm
             src/nn/transformer.cppm
+            src/nn/decoder.cppm
             src/nn/parameters.cppm
             src/optim/optim.cppm
             src/optim/adamw.cppm

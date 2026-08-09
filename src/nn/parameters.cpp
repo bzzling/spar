@@ -2,6 +2,7 @@ module spar.nn.parameters;
 
 import std;
 import spar.nn.attention;
+import spar.nn.decoder;
 import spar.nn.embedding;
 import spar.nn.linear;
 import spar.nn.mlp;
@@ -97,6 +98,17 @@ vector<NamedParameter> named_parameters(TransformerBlock& layer) {
   return result;
 }
 
+vector<NamedParameter> named_parameters(DecoderLM& model) {
+  vector<NamedParameter> result;
+  append_prefixed(result, "token_embedding.", named_parameters(model.token_embedding()));
+  for (size_t index{0}; index < model.num_layers(); ++index) {
+    append_prefixed(result, "blocks." + to_string(index) + ".",
+                    named_parameters(model.block(index)));
+  }
+  append_prefixed(result, "final_norm.", named_parameters(model.final_norm()));
+  return result;
+}
+
 vector<Parameter> parameters(Linear& layer) {
   return unnamed(named_parameters(layer));
 }
@@ -114,6 +126,9 @@ vector<Parameter> parameters(SwiGLUMLP& layer) {
 }
 vector<Parameter> parameters(TransformerBlock& layer) {
   return unnamed(named_parameters(layer));
+}
+vector<Parameter> parameters(DecoderLM& model) {
+  return unnamed(named_parameters(model));
 }
 
 void zero_grad(Linear& layer) {
@@ -133,6 +148,9 @@ void zero_grad(SwiGLUMLP& layer) {
 }
 void zero_grad(TransformerBlock& layer) {
   clear_gradients(layer);
+}
+void zero_grad(DecoderLM& model) {
+  clear_gradients(model);
 }
 
 } // namespace spar::nn
