@@ -113,6 +113,8 @@ target_sources(spar
         src/tokenizer/artifact.cpp
         src/data/tokenized_corpus.cpp
         src/data/batch_iterator.cpp
+        src/training/gradients.cpp
+        src/training/schedule.cpp
         src/optim/adamw.cpp
     PUBLIC
         FILE_SET spar_modules TYPE CXX_MODULES
@@ -154,6 +156,9 @@ target_sources(spar
             src/data/data.cppm
             src/data/tokenized_corpus.cppm
             src/data/batch_iterator.cppm
+            src/training/training.cppm
+            src/training/gradients.cppm
+            src/training/schedule.cppm
             src/optim/optim.cppm
             src/optim/adamw.cppm
 )
