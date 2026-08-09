@@ -11,6 +11,11 @@ public:
                  double beta1 = 0.9, double beta2 = 0.999, double epsilon = 1.0e-8,
                  double weight_decay = 0.01);
 
+  AdamW(const AdamW&) = delete;
+  AdamW& operator=(const AdamW&) = delete;
+  AdamW(AdamW&&) noexcept = default;
+  AdamW& operator=(AdamW&&) noexcept = default;
+
   void step();
   void zero_grad();
 
