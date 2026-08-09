@@ -11,4 +11,5 @@ export import spar.checkpoint;
 export import spar.tokenizer;
 export import spar.data;
 export import spar.training;
+export import spar.leda;
 export import spar.optim;
