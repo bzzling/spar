@@ -94,6 +94,12 @@ target_sources(spar
         src/ops/scalar.cpp
         src/ops/unary.cpp
         src/ops/softmax.cpp
+        src/ops/embedding.cpp
+        src/nn/parameter.cpp
+        src/nn/linear.cpp
+        src/nn/embedding.cpp
+        src/nn/rmsnorm.cpp
+        src/nn/functional.cpp
     PUBLIC
         FILE_SET spar_modules TYPE CXX_MODULES
         BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -111,6 +117,13 @@ target_sources(spar
             src/ops/scalar.cppm
             src/ops/unary.cppm
             src/ops/softmax.cppm
+            src/ops/embedding.cppm
+            src/nn/nn.cppm
+            src/nn/parameter.cppm
+            src/nn/linear.cppm
+            src/nn/embedding.cppm
+            src/nn/rmsnorm.cppm
+            src/nn/functional.cppm
 )
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
