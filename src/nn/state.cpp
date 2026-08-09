@@ -13,6 +13,10 @@ namespace {
 
 template <typename T> void copy_logical(Tensor& destination, const Tensor& source) {
   auto output{destination.span<T>()};
+  if (source.is_contiguous()) {
+    ranges::copy(source.span<T>(), output.begin());
+    return;
+  }
   for (size_t index{0}; index < output.size(); ++index) {
     output[index] = detail::logical_value<T>(source, index);
   }

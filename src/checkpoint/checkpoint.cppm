@@ -20,6 +20,8 @@ struct LoadedTrainingCheckpoint final {
   TrainingProgress progress;
 };
 
+/// Saves a consistent training boundary. The caller must provide exclusive logical access to the
+/// model, optimizer, and RNG for the duration of this call; concurrent mutation is unsupported.
 void save_training_checkpoint(const std::filesystem::path& path, nn::DecoderLM& model,
                               const optim::AdamW& optimizer, const Random& random,
                               TrainingProgress progress);

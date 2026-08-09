@@ -21,6 +21,15 @@ constexpr uint32_t endian_marker{0x01020304U};
 constexpr uint64_t payload_alignment{64};
 constexpr uint32_t maximum_name_bytes{1024U * 1024U};
 constexpr uint32_t maximum_rank{64};
+constexpr size_t payload_chunk_bytes{1U << 20U};
+
+static_assert(endian::native == endian::little || endian::native == endian::big);
+static_assert(sizeof(float) == 4);
+static_assert(sizeof(double) == 8);
+static_assert(sizeof(int32_t) == 4);
+static_assert(sizeof(int64_t) == 8);
+static_assert(numeric_limits<float>::is_iec559);
+static_assert(numeric_limits<double>::is_iec559);
 
 // Spar checkpoint v1 is a canonical little-endian stream:
 // magic/version/endian marker; DecoderConfig; progress; RNG state; AdamW
@@ -39,7 +48,7 @@ public:
 
   void bytes(const char* data, size_t size) {
     for (size_t offset{0}; offset < size;) {
-      const size_t chunk{min(size - offset, static_cast<size_t>(1U << 20U))};
+      const size_t chunk{min(size - offset, payload_chunk_bytes)};
       stream_.write(data + offset, static_cast<streamsize>(chunk));
       if (!stream_) {
         throw runtime_error{"Checkpoint write failed"};
@@ -47,6 +56,9 @@ public:
       offset += chunk;
       position_ += chunk;
     }
+  }
+  void bytes(span<const byte> data) {
+    bytes(reinterpret_cast<const char*>(data.data()), data.size());
   }
   void u8(uint8_t value) {
     const char byte{static_cast<char>(value)};
@@ -110,7 +122,7 @@ public:
 
   void bytes(char* destination, size_t size) {
     for (size_t offset{0}; offset < size;) {
-      const size_t chunk{min(size - offset, static_cast<size_t>(1U << 20U))};
+      const size_t chunk{min(size - offset, payload_chunk_bytes)};
       stream_.read(destination + offset, static_cast<streamsize>(chunk));
       if (stream_.gcount() != static_cast<streamsize>(chunk)) {
         throw runtime_error{"Checkpoint is truncated"};
@@ -118,6 +130,9 @@ public:
       offset += chunk;
       position_ += chunk;
     }
+  }
+  void bytes(span<byte> destination) {
+    bytes(reinterpret_cast<char*>(destination.data()), destination.size());
   }
   uint8_t u8() {
     char byte{};
@@ -214,13 +229,25 @@ DType spar_dtype(uint8_t tag) {
 
 template <typename T, typename Bits>
 void write_tensor_values(Writer& writer, const Tensor& tensor) {
-  for (size_t index{0}; index < tensor.numel(); ++index) {
-    const T value{detail::logical_value<T>(tensor, index)};
-    if constexpr (sizeof(Bits) == 4) {
-      writer.u32(bit_cast<Bits>(value));
-    } else {
-      writer.u64(bit_cast<Bits>(value));
+  if constexpr (endian::native == endian::little) {
+    if (tensor.is_contiguous()) {
+      writer.bytes(as_bytes(tensor.span<T>()));
+      return;
     }
+  }
+
+  const size_t chunk_elements{payload_chunk_bytes / sizeof(Bits)};
+  vector<Bits> encoded(min(tensor.numel(), chunk_elements));
+  for (size_t offset{0}; offset < tensor.numel(); offset += encoded.size()) {
+    const size_t count{min(encoded.size(), tensor.numel() - offset)};
+    for (size_t index{0}; index < count; ++index) {
+      Bits bits{bit_cast<Bits>(detail::logical_value<T>(tensor, offset + index))};
+      if constexpr (endian::native == endian::big) {
+        bits = byteswap(bits);
+      }
+      encoded[index] = bits;
+    }
+    writer.bytes(as_bytes(span<const Bits>{encoded.data(), count}));
   }
 }
 
@@ -244,11 +271,18 @@ void write_payload(Writer& writer, const Tensor& tensor) {
 
 template <typename T, typename Bits> void read_tensor_values(Reader& reader, Tensor& tensor) {
   auto values{tensor.span<T>()};
-  for (T& value : values) {
-    if constexpr (sizeof(Bits) == 4) {
-      value = bit_cast<T>(static_cast<Bits>(reader.u32()));
-    } else {
-      value = bit_cast<T>(static_cast<Bits>(reader.u64()));
+  if constexpr (endian::native == endian::little) {
+    reader.bytes(as_writable_bytes(values));
+    return;
+  }
+
+  const size_t chunk_elements{payload_chunk_bytes / sizeof(Bits)};
+  vector<Bits> encoded(min(values.size(), chunk_elements));
+  for (size_t offset{0}; offset < values.size(); offset += encoded.size()) {
+    const size_t count{min(encoded.size(), values.size() - offset)};
+    reader.bytes(as_writable_bytes(span<Bits>{encoded.data(), count}));
+    for (size_t index{0}; index < count; ++index) {
+      values[offset + index] = bit_cast<T>(byteswap(encoded[index]));
     }
   }
 }
@@ -346,10 +380,16 @@ Shape read_shape(Reader& reader) {
   return Shape{dimensions};
 }
 
-struct SavedOptimizerEntry final {
-  string name;
-  optional<optim::AdamWParameterState> state;
-};
+void validate_optimizer_state(const nn::Parameter& parameter,
+                              const optim::AdamWParameterState& state) {
+  const Tensor& value{parameter.tensor()};
+  if (state.step == 0 || state.first_moment.shape() != value.shape() ||
+      state.second_moment.shape() != value.shape() || state.first_moment.dtype() != value.dtype() ||
+      state.second_moment.dtype() != value.dtype() ||
+      (value.dtype() != DType::Float32 && value.dtype() != DType::Float64)) {
+    throw invalid_argument{"Checkpoint optimizer state is structurally invalid"};
+  }
+}
 
 } // namespace
 
@@ -367,11 +407,12 @@ void save_training_checkpoint(const filesystem::path& path, nn::DecoderLM& model
       })) {
     throw invalid_argument{"Checkpoint optimizer does not track exactly the model Parameters"};
   }
-  const auto model_state{nn::state_dict(model)};
-  vector<SavedOptimizerEntry> optimizer_state;
-  optimizer_state.reserve(named.size());
+  // Prevalidate one cloned optimizer state at a time before creating the temporary file.
   for (const nn::NamedParameter& entry : named) {
-    optimizer_state.push_back({entry.name, optimizer.parameter_state(entry.parameter)});
+    const auto state{optimizer.parameter_state(entry.parameter)};
+    if (state) {
+      validate_optimizer_state(entry.parameter, *state);
+    }
   }
 
   filesystem::path temporary{path};
@@ -392,25 +433,26 @@ void save_training_checkpoint(const filesystem::path& path, nn::DecoderLM& model
     writer.f64(optimizer.beta2());
     writer.f64(optimizer.epsilon());
     writer.f64(optimizer.weight_decay());
-    writer.u64(model_state.size());
-    for (size_t index{0}; index < model_state.size(); ++index) {
-      const nn::NamedTensor& state{model_state[index]};
-      writer.string_value(state.name);
-      writer.u8(wire_dtype(state.value.dtype()));
-      writer.boolean(named[index].parameter.requires_grad());
-      write_shape(writer, state.value.shape());
-      writer.u64(state.value.nbytes());
-      write_payload(writer, state.value);
-    }
-    writer.u64(optimizer_state.size());
-    for (const SavedOptimizerEntry& entry : optimizer_state) {
+    writer.u64(named.size());
+    for (const nn::NamedParameter& entry : named) {
+      const Tensor& value{entry.parameter.tensor()};
       writer.string_value(entry.name);
-      writer.boolean(entry.state.has_value());
-      if (entry.state) {
-        writer.u64(entry.state->step);
-        writer.u64(entry.state->first_moment.nbytes());
-        write_payload(writer, entry.state->first_moment);
-        write_payload(writer, entry.state->second_moment);
+      writer.u8(wire_dtype(value.dtype()));
+      writer.boolean(entry.parameter.requires_grad());
+      write_shape(writer, value.shape());
+      writer.u64(value.nbytes());
+      write_payload(writer, value);
+    }
+    writer.u64(named.size());
+    for (const nn::NamedParameter& entry : named) {
+      writer.string_value(entry.name);
+      const auto state{optimizer.parameter_state(entry.parameter)};
+      writer.boolean(state.has_value());
+      if (state) {
+        writer.u64(state->step);
+        writer.u64(state->first_moment.nbytes());
+        write_payload(writer, state->first_moment);
+        write_payload(writer, state->second_moment);
       }
     }
     writer.finish();
