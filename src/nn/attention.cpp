@@ -28,6 +28,8 @@ struct AttentionShape final {
 
 AttentionShape validate_attention(const Tensor& query, const Tensor& key, const Tensor& value,
                                   bool causal) {
+  detail::validate_same_device(query, key, "scaled_dot_product_attention");
+  detail::validate_same_device(query, value, "scaled_dot_product_attention");
   if (query.rank() != 4 || key.rank() != 4 || value.rank() != 4) {
     throw invalid_argument{"scaled_dot_product_attention requires rank-4 Q, K, and V"};
   }
@@ -90,9 +92,9 @@ Tensor repeat_kv_heads(const Tensor& input, size_t query_heads) {
       Shape{dimension(batch), dimension(query_heads), dimension(sequence), dimension(features)});
 }
 
-Tensor causal_mask(size_t sequence_length, DType dtype) {
+Tensor causal_mask(size_t sequence_length, DType dtype, Device device) {
   const auto dimension{static_cast<Shape::dimension_type>(sequence_length)};
-  Tensor mask{zeros(Shape{dimension, dimension}, dtype)};
+  Tensor mask{zeros(Shape{dimension, dimension}, dtype, device)};
   if (dtype == DType::Float32) {
     auto values{mask.span<float>()};
     for (size_t row{0}; row < sequence_length; ++row) {
@@ -122,7 +124,7 @@ Tensor scaled_dot_product_attention(const Tensor& query, const Tensor& key, cons
   Tensor scores{multiply_scalar(matmul(query, transposed_key),
                                 1.0 / sqrt(static_cast<double>(shape.head_dimension)))};
   if (causal) {
-    scores = add(scores, causal_mask(shape.query_length, query.dtype()));
+    scores = add(scores, causal_mask(shape.query_length, query.dtype(), query.device()));
   }
   const Tensor probabilities{softmax(scores, 3)};
   return matmul(probabilities, repeated_value);

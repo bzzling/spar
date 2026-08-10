@@ -23,7 +23,7 @@ template <typename T> Tensor sum_values(const Tensor& input) {
     result += detail::logical_value<T>(input, index);
   }
 
-  Tensor output{Shape{}, input.dtype()};
+  Tensor output{Shape{}, input.dtype(), input.device()};
   output.span<T>()[0] = result;
   return output;
 }
@@ -35,7 +35,7 @@ template <typename T> Tensor mean_values(const Tensor& input) {
   }
   result /= static_cast<T>(input.numel());
 
-  Tensor output{Shape{}, input.dtype()};
+  Tensor output{Shape{}, input.dtype(), input.device()};
   output.span<T>()[0] = result;
   return output;
 }
@@ -53,7 +53,7 @@ template <typename T> Tensor max_values(const Tensor& input) {
     }
   }
 
-  Tensor output{Shape{}, input.dtype()};
+  Tensor output{Shape{}, input.dtype(), input.device()};
   output.span<T>()[0] = result;
   return output;
 }
@@ -109,7 +109,7 @@ size_t reduced_element_count(const Tensor& input, span<const size_t> axes) {
 template <typename T>
 Tensor axis_sum_values(const Tensor& input, span<const size_t> axes, bool keepdim,
                        const Shape& output_shape) {
-  Tensor output{zeros(output_shape, input.dtype())};
+  Tensor output{zeros(output_shape, input.dtype(), input.device())};
   auto output_values{output.span<T>()};
   const auto output_strides{output_shape.contiguous_strides()};
   vector<bool> reduced(input.rank(), false);
@@ -173,7 +173,7 @@ Tensor sum(const Tensor& input) {
     const Shape input_shape{input.shape()};
     const DType input_dtype{input.dtype()};
     detail::record_operation(output, {input}, [input_shape, input_dtype](const Tensor& gradient) {
-      Tensor contribution{input_shape, input_dtype};
+      Tensor contribution{input_shape, input_dtype, gradient.device()};
       if (input_dtype == DType::Float32) {
         contribution.fill<float>(gradient.span<float>()[0]);
       } else {
@@ -225,7 +225,7 @@ Tensor mean(const Tensor& input) {
     const size_t input_numel{input.numel()};
     detail::record_operation(
         output, {input}, [input_shape, input_dtype, input_numel](const Tensor& gradient) {
-          Tensor contribution{input_shape, input_dtype};
+          Tensor contribution{input_shape, input_dtype, gradient.device()};
           if (input_dtype == DType::Float32) {
             contribution.fill<float>(gradient.span<float>()[0] / static_cast<float>(input_numel));
           } else {

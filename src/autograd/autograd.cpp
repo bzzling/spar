@@ -1,6 +1,7 @@
 module spar.tensor;
 
 import std;
+import spar.device;
 import spar.dtype;
 import spar.shape;
 
@@ -14,6 +15,7 @@ struct AutogradEdge final {
   shared_ptr<AutogradMeta> identity;
   Shape expected_shape;
   DType expected_dtype;
+  Device expected_device;
 };
 
 struct AutogradNode final {
@@ -45,12 +47,16 @@ void record_operation(Tensor& output, vector<Tensor> requiring_parents, Backward
     if (!parent.requires_grad()) {
       throw logic_error{"Autograd nodes may retain only requiring-grad parents"};
     }
+    if (parent.device() != output.device()) {
+      throw logic_error{"Autograd output and parent Device mismatch"};
+    }
   }
 
   vector<AutogradEdge> edges;
   edges.reserve(requiring_parents.size());
   for (const Tensor& parent : requiring_parents) {
-    edges.push_back(AutogradEdge{AutogradAccess::meta(parent), parent.shape(), parent.dtype()});
+    edges.push_back(AutogradEdge{AutogradAccess::meta(parent), parent.shape(), parent.dtype(),
+                                 parent.device()});
   }
 
   auto& output_meta{AutogradAccess::meta(output)};
@@ -72,8 +78,9 @@ namespace spar {
 namespace {
 
 void add_gradient_values(Tensor& destination, const Tensor& contribution) {
-  if (destination.shape() != contribution.shape() || destination.dtype() != contribution.dtype()) {
-    throw logic_error{"Internal gradient accumulation shape or dtype mismatch"};
+  if (destination.shape() != contribution.shape() || destination.dtype() != contribution.dtype() ||
+      destination.device() != contribution.device()) {
+    throw logic_error{"Internal gradient accumulation shape, dtype, or Device mismatch"};
   }
   if (!destination.is_contiguous() || !contribution.is_contiguous()) {
     throw logic_error{"Internal gradient accumulation requires contiguous tensors"};
@@ -103,8 +110,9 @@ void add_gradient_values(Tensor& destination, const Tensor& contribution) {
 [[nodiscard]] Tensor independent_gradient(const Tensor& contribution,
                                           const detail::AutogradEdge& parent) {
   if (contribution.shape() != parent.expected_shape ||
-      contribution.dtype() != parent.expected_dtype) {
-    throw logic_error{"Backward rule produced a gradient with incorrect shape or dtype"};
+      contribution.dtype() != parent.expected_dtype ||
+      contribution.device() != parent.expected_device) {
+    throw logic_error{"Backward rule produced a gradient with incorrect shape, dtype, or Device"};
   }
   if (contribution.requires_grad()) {
     throw logic_error{"Backward rule produced a higher-order gradient"};
@@ -193,7 +201,7 @@ void Tensor::backward() {
   visit(visit, autograd_);
 
   unordered_map<detail::AutogradMeta*, Tensor> gradients;
-  gradients.emplace(autograd_.get(), ones(shape_, dtype_));
+  gradients.emplace(autograd_.get(), ones(shape_, dtype_, device()));
 
   for (auto iterator{topological_order.rbegin()}; iterator != topological_order.rend();
        ++iterator) {

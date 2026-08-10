@@ -83,6 +83,9 @@ double global_grad_norm(span<nn::Parameter> parameters) {
   StableSumSquares accumulator;
   for (nn::Parameter* parameter : unique_active_parameters(parameters)) {
     const Tensor gradient{parameter->grad()};
+    if (gradient.device() != parameter->tensor().device()) {
+      throw logic_error{"Active Parameter gradient Device mismatch"};
+    }
     switch (gradient.dtype()) {
     case DType::Float32:
       add_gradient_to_norm<float>(gradient, accumulator);
@@ -104,6 +107,9 @@ void scale_gradients(span<nn::Parameter> parameters, double factor) {
   }
   for (nn::Parameter* parameter : unique_active_parameters(parameters)) {
     Tensor gradient{parameter->grad()};
+    if (gradient.device() != parameter->tensor().device()) {
+      throw logic_error{"Active Parameter gradient Device mismatch"};
+    }
     switch (gradient.dtype()) {
     case DType::Float32:
       scale_gradient<float>(gradient, factor);

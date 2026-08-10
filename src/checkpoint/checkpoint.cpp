@@ -252,6 +252,9 @@ void write_tensor_values(Writer& writer, const Tensor& tensor) {
 }
 
 void write_payload(Writer& writer, const Tensor& tensor) {
+  if (!tensor.device().is_cpu()) {
+    throw invalid_argument{"SPARCKPT v1 supports CPU Tensors only"};
+  }
   writer.align_payload();
   switch (tensor.dtype()) {
   case DType::Float32:
@@ -293,7 +296,7 @@ Tensor read_payload(Reader& reader, Shape shape, DType dtype, uint64_t encoded_n
     throw runtime_error{"Checkpoint tensor payload byte count mismatch"};
   }
   reader.align_payload();
-  Tensor tensor{std::move(shape), dtype};
+  Tensor tensor{std::move(shape), dtype, Device::cpu()};
   switch (dtype) {
   case DType::Float32:
     read_tensor_values<float, uint32_t>(reader, tensor);
@@ -386,6 +389,8 @@ void validate_optimizer_state(const nn::Parameter& parameter,
   if (state.step == 0 || state.first_moment.shape() != value.shape() ||
       state.second_moment.shape() != value.shape() || state.first_moment.dtype() != value.dtype() ||
       state.second_moment.dtype() != value.dtype() ||
+      state.first_moment.device() != value.device() ||
+      state.second_moment.device() != value.device() || !value.device().is_cpu() ||
       (value.dtype() != DType::Float32 && value.dtype() != DType::Float64)) {
     throw invalid_argument{"Checkpoint optimizer state is structurally invalid"};
   }
@@ -397,6 +402,11 @@ void save_training_checkpoint(const filesystem::path& path, nn::DecoderLM& model
                               const optim::AdamW& optimizer, const Random& random,
                               TrainingProgress progress) {
   const auto named{nn::named_parameters(model)};
+  if (ranges::any_of(named, [](const nn::NamedParameter& entry) {
+        return !entry.parameter.tensor().device().is_cpu();
+      })) {
+    throw invalid_argument{"SPARCKPT v1 supports CPU model Parameters only"};
+  }
   if (ranges::any_of(named,
                      [](const nn::NamedParameter& entry) { return entry.parameter.has_grad(); })) {
     throw invalid_argument{"Cannot checkpoint a model with accumulated gradients"};

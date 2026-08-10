@@ -1,6 +1,7 @@
 module spar.tensor;
 
 import std;
+import spar.device;
 import spar.dtype;
 import spar.shape;
 import spar.storage;
@@ -9,10 +10,10 @@ using namespace std;
 
 namespace spar {
 
-Tensor::Tensor(Shape shape, DType dtype)
+Tensor::Tensor(Shape shape, DType dtype, Device device)
     : storage_{}, dtype_{dtype}, shape_{std::move(shape)}, strides_{shape_.contiguous_strides()},
       storage_offset_{0}, nbytes_{checked_nbytes(shape_.numel(), dtype_)} {
-  storage_ = make_shared<detail::Storage>(nbytes_);
+  storage_ = make_shared<detail::Storage>(nbytes_, device);
   initialize_autograd();
   validate_view_bounds();
 }
@@ -88,6 +89,10 @@ DType Tensor::dtype() const noexcept {
   return dtype_;
 }
 
+Device Tensor::device() const noexcept {
+  return storage_ == nullptr ? Device::cpu() : storage_->device();
+}
+
 size_t Tensor::nbytes() const noexcept {
   return nbytes_;
 }
@@ -110,9 +115,9 @@ bool Tensor::is_contiguous() const noexcept {
 }
 
 Tensor Tensor::materialize_contiguous() const {
-  Tensor output{shape_, dtype_};
+  Tensor output{shape_, dtype_, device()};
   const auto copy_values = [this, &output]<typename T> {
-    const auto source_base{reinterpret_cast<const T*>(data())};
+    const auto source_base{reinterpret_cast<const T*>(host_data())};
     auto destination_values{output.span<T>()};
     for (size_t index{0}; index < destination_values.size(); ++index) {
       destination_values[index] = source_base[logical_storage_index(index)];
@@ -322,20 +327,20 @@ size_t Tensor::logical_storage_index(size_t logical_index) const {
   return storage_index;
 }
 
-byte* Tensor::mutable_data() noexcept {
-  return storage_ == nullptr ? nullptr : storage_->data();
+byte* Tensor::mutable_host_data() {
+  return storage_ == nullptr ? nullptr : storage_->host_data();
 }
 
-const byte* Tensor::data() const noexcept {
-  return storage_ == nullptr ? nullptr : storage_->data();
+const byte* Tensor::host_data() const {
+  return storage_ == nullptr ? nullptr : storage_->host_data();
 }
 
 void swap(Tensor& left, Tensor& right) noexcept {
   left.swap(right);
 }
 
-Tensor zeros(Shape shape, DType dtype) {
-  Tensor tensor{std::move(shape), dtype};
+Tensor zeros(Shape shape, DType dtype, Device device) {
+  Tensor tensor{std::move(shape), dtype, device};
   switch (dtype) {
   case DType::Float32:
     tensor.fill<float>(0.0F);
@@ -353,8 +358,8 @@ Tensor zeros(Shape shape, DType dtype) {
   return tensor;
 }
 
-Tensor ones(Shape shape, DType dtype) {
-  Tensor tensor{std::move(shape), dtype};
+Tensor ones(Shape shape, DType dtype, Device device) {
+  Tensor tensor{std::move(shape), dtype, device};
   switch (dtype) {
   case DType::Float32:
     tensor.fill<float>(1.0F);
@@ -375,6 +380,12 @@ Tensor ones(Shape shape, DType dtype) {
 } // namespace spar
 
 namespace spar::detail {
+
+void validate_same_device(const Tensor& left, const Tensor& right, string_view operation) {
+  if (left.device() != right.device()) {
+    throw invalid_argument{string{operation} + " requires tensors on the same Device"};
+  }
+}
 
 Shape broadcast_shape(const Shape& left, const Shape& right) {
   const size_t result_rank{std::max(left.rank(), right.rank())};
@@ -432,7 +443,7 @@ Tensor reduce_gradient_to_shape(const Tensor& gradient, const Shape& original_sh
     throw logic_error{"Gradient shape cannot be reduced to the requested broadcast parent shape"};
   }
 
-  Tensor result{zeros(original_shape, gradient.dtype())};
+  Tensor result{zeros(original_shape, gradient.dtype(), gradient.device())};
   if (gradient.dtype() == DType::Float32) {
     reduce_gradient_values<float>(gradient, result, original_shape);
   } else {

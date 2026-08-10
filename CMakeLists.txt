@@ -84,6 +84,7 @@ set_target_properties(spar PROPERTIES
 target_sources(spar
     PRIVATE
         src/autograd/autograd.cpp
+        src/core/device.cpp
         src/core/storage.cpp
         src/core/shape.cpp
         src/core/tensor.cpp
@@ -121,6 +122,7 @@ target_sources(spar
         BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/src"
         FILES
             src/spar.cppm
+            src/core/device.cppm
             src/core/storage.cppm
             src/core/dtype.cppm
             src/core/shape.cppm

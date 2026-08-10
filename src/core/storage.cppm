@@ -1,6 +1,7 @@
 export module spar.storage;
 
 import std;
+import spar.device;
 
 export namespace spar::detail {
 
@@ -8,19 +9,21 @@ export namespace spar::detail {
 /// This type is not re-exported by the ordinary `spar` umbrella module.
 class Storage final {
 public:
-  explicit Storage(std::size_t nbytes);
+  Storage(std::size_t nbytes, Device device);
   Storage(const Storage&) = delete;
   Storage& operator=(const Storage&) = delete;
   Storage(Storage&&) = delete;
   Storage& operator=(Storage&&) = delete;
   ~Storage();
 
-  [[nodiscard]] std::byte* data() noexcept;
-  [[nodiscard]] const std::byte* data() const noexcept;
+  [[nodiscard]] std::byte* host_data();
+  [[nodiscard]] const std::byte* host_data() const;
+  [[nodiscard]] Device device() const noexcept;
   [[nodiscard]] std::size_t nbytes() const noexcept;
 
 private:
   std::size_t nbytes_;
+  Device device_;
   std::unique_ptr<std::byte[]> data_;
 };
 

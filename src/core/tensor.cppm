@@ -1,6 +1,7 @@
 export module spar.tensor;
 
 import std;
+export import spar.device;
 import spar.dtype;
 import spar.shape;
 import spar.storage;
@@ -17,12 +18,12 @@ template <typename T> T logical_value(const spar::Tensor& tensor, std::size_t lo
 
 export namespace spar {
 
-/// A typed, shaped, strided view over reference-counted CPU Storage.
+/// A typed, shaped, strided view over reference-counted Storage.
 /// Tensor copies and metadata-only views share Storage; use `clone()` for an independent copy.
 class Tensor {
 public:
   /// allocates contiguous row-major storage without initializing its elements.
-  Tensor(Shape shape, DType dtype);
+  Tensor(Shape shape, DType dtype, Device device = Device::cpu());
   /// makes a shallow handle copy sharing the same Storage.
   Tensor(const Tensor&) = default;
   Tensor& operator=(const Tensor&) = default;
@@ -38,6 +39,7 @@ public:
   [[nodiscard]] std::span<const Shape::stride_type> strides() const noexcept;
   [[nodiscard]] std::size_t numel() const noexcept;
   [[nodiscard]] DType dtype() const noexcept;
+  [[nodiscard]] Device device() const noexcept;
   /// returns logical tensor bytes, not the size of the shared allocation.
   [[nodiscard]] std::size_t nbytes() const noexcept;
   [[nodiscard]] bool is_contiguous() const noexcept;
@@ -82,7 +84,7 @@ public:
     if (numel() == 0) {
       return {};
     }
-    return {reinterpret_cast<T*>(mutable_data()) + storage_offset_, numel()};
+    return {reinterpret_cast<T*>(mutable_host_data()) + storage_offset_, numel()};
   }
 
   /// returns read-only typed access after validating dtype and logical contiguity.
@@ -91,7 +93,7 @@ public:
     if (numel() == 0) {
       return {};
     }
-    return {reinterpret_cast<const T*>(data()) + storage_offset_, numel()};
+    return {reinterpret_cast<const T*>(host_data()) + storage_offset_, numel()};
   }
 
   /// prevents spans that would immediately dangle from temporary Tensor handles.
@@ -119,10 +121,13 @@ private:
   [[nodiscard]] static std::size_t checked_nbytes(std::size_t numel, DType dtype);
   [[nodiscard]] Tensor materialize_contiguous() const;
   [[nodiscard]] std::size_t logical_storage_index(std::size_t logical_index) const;
-  [[nodiscard]] std::byte* mutable_data() noexcept;
-  [[nodiscard]] const std::byte* data() const noexcept;
+  [[nodiscard]] std::byte* mutable_host_data();
+  [[nodiscard]] const std::byte* host_data() const;
 
   template <typename T> void validate_access() const {
+    if (!device().is_cpu()) {
+      throw std::logic_error{"Tensor span requires CPU Storage"};
+    }
     if (dtype_of<T>() != dtype_) {
       throw std::invalid_argument{"Typed tensor access does not match the tensor dtype"};
     }
@@ -143,13 +148,14 @@ private:
 void swap(Tensor& left, Tensor& right) noexcept;
 
 /// returns a contiguous tensor initialized to zero.
-[[nodiscard]] Tensor zeros(Shape shape, DType dtype);
+[[nodiscard]] Tensor zeros(Shape shape, DType dtype, Device device = Device::cpu());
 /// returns a contiguous tensor initialized to one.
-[[nodiscard]] Tensor ones(Shape shape, DType dtype);
+[[nodiscard]] Tensor ones(Shape shape, DType dtype, Device device = Device::cpu());
 
 /// returns a contiguous tensor filled with `value`, inferring its dtype from `T`.
-template <typename T> [[nodiscard]] Tensor full(Shape shape, T value) {
-  Tensor tensor{std::move(shape), dtype_of<T>()};
+template <typename T>
+[[nodiscard]] Tensor full(Shape shape, T value, Device device = Device::cpu()) {
+  Tensor tensor{std::move(shape), dtype_of<T>(), device};
   tensor.fill<T>(value);
   return tensor;
 }
@@ -165,11 +171,12 @@ template <typename T> T logical_value(const Tensor& tensor, std::size_t logical_
   if (logical_index >= tensor.numel()) {
     throw std::out_of_range{"Internal logical tensor index is out of range"};
   }
-  const auto base{reinterpret_cast<const T*>(tensor.data())};
+  const auto base{reinterpret_cast<const T*>(tensor.host_data())};
   return base[tensor.logical_storage_index(logical_index)];
 }
 
 [[nodiscard]] Shape broadcast_shape(const Shape& left, const Shape& right);
+void validate_same_device(const Tensor& left, const Tensor& right, std::string_view operation);
 [[nodiscard]] Tensor reduce_gradient_to_shape(const Tensor& gradient, const Shape& original_shape);
 
 /// Internal operation-recording hook; graph node types remain private to spar.tensor.

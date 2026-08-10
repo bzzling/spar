@@ -37,6 +37,9 @@ template <typename T>
 void update_values(Tensor& values, const Tensor& gradient, Tensor& first_moment,
                    Tensor& second_moment, uint64_t step, double learning_rate, double beta1,
                    double beta2, double epsilon, double weight_decay) {
+  spar::detail::validate_same_device(values, gradient, "AdamW update");
+  spar::detail::validate_same_device(values, first_moment, "AdamW update");
+  spar::detail::validate_same_device(values, second_moment, "AdamW update");
   auto parameter_values{values.span<T>()};
   const auto gradient_values{gradient.span<T>()};
   auto first_values{first_moment.span<T>()};
@@ -84,12 +87,16 @@ void AdamW::step() {
     }
     const Tensor gradient{parameter.grad()};
     if (gradient.shape() != parameter.tensor().shape() ||
-        gradient.dtype() != parameter.tensor().dtype()) {
-      throw logic_error{"AdamW gradient shape or dtype does not match its Parameter"};
+        gradient.dtype() != parameter.tensor().dtype() ||
+        gradient.device() != parameter.tensor().device()) {
+      throw logic_error{"AdamW gradient shape, dtype, or Device does not match its Parameter"};
     }
     if (!entry.state) {
-      entry.state.emplace(zeros(parameter.tensor().shape(), parameter.tensor().dtype()),
-                          zeros(parameter.tensor().shape(), parameter.tensor().dtype()), 0);
+      entry.state.emplace(zeros(parameter.tensor().shape(), parameter.tensor().dtype(),
+                                parameter.tensor().device()),
+                          zeros(parameter.tensor().shape(), parameter.tensor().dtype(),
+                                parameter.tensor().device()),
+                          0);
     }
     State& state{*entry.state};
     if (state.step == numeric_limits<uint64_t>::max()) {
@@ -180,8 +187,9 @@ void AdamW::set_parameter_state(const nn::Parameter& parameter,
   }
   for (const Tensor* moment : {&state->first_moment, &state->second_moment}) {
     if (moment->shape() != parameter.tensor().shape() ||
-        moment->dtype() != parameter.tensor().dtype()) {
-      throw invalid_argument{"AdamW restored moment shape or dtype mismatch"};
+        moment->dtype() != parameter.tensor().dtype() ||
+        moment->device() != parameter.tensor().device()) {
+      throw invalid_argument{"AdamW restored moment shape, dtype, or Device mismatch"};
     }
     if (moment->dtype() != DType::Float32 && moment->dtype() != DType::Float64) {
       throw invalid_argument{"AdamW restored moments must be floating point"};

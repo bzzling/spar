@@ -23,6 +23,7 @@ template <typename T> void copy_logical(Tensor& destination, const Tensor& sourc
 }
 
 void copy_tensor(Tensor& destination, const Tensor& source) {
+  detail::validate_same_device(destination, source, "state Tensor copy");
   switch (destination.dtype()) {
   case DType::Float32:
     copy_logical<float>(destination, source);
@@ -74,6 +75,9 @@ void load_state_dict(DecoderLM& model, span<const NamedTensor> state) {
     }
     if (value.dtype() != expected.parameter.tensor().dtype()) {
       throw invalid_argument{"load_state_dict Parameter dtype mismatch"};
+    }
+    if (value.device() != expected.parameter.tensor().device()) {
+      throw invalid_argument{"load_state_dict Parameter Device mismatch"};
     }
   }
   for (const NamedParameter& expected : destination) {

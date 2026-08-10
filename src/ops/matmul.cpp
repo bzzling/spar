@@ -20,6 +20,7 @@ struct MatmulPlan final {
 };
 
 MatmulPlan plan_matmul(const Tensor& a, const Tensor& b) {
+  detail::validate_same_device(a, b, "matmul");
   if (a.rank() < 2 || b.rank() < 2) {
     throw invalid_argument{"matmul requires tensors with rank at least 2"};
   }
@@ -68,7 +69,7 @@ MatmulPlan plan_matmul(const Tensor& a, const Tensor& b) {
 
 template <typename T>
 Tensor matmul_values(const Tensor& a, const Tensor& b, const MatmulPlan& plan) {
-  Tensor output{plan.output_shape, a.dtype()};
+  Tensor output{plan.output_shape, a.dtype(), a.device()};
   if (output.numel() == 0) {
     return output;
   }

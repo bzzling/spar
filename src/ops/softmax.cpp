@@ -49,7 +49,7 @@ template <typename T> AxisSoftmaxResult axis_softmax_values(const Tensor& input,
     inner *= static_cast<size_t>(input.shape()[index]);
   }
 
-  Tensor output{input.shape(), input.dtype()};
+  Tensor output{input.shape(), input.dtype(), input.device()};
   auto output_values{output.span<T>()};
   vector<unsigned char> undefined_slices(outer * inner, 0);
   const T infinity{numeric_limits<T>::infinity()};
@@ -121,7 +121,8 @@ Tensor axis_softmax_gradient(const Tensor& gradient, const Tensor& saved_output,
 
   const auto gradient_values{gradient.span<T>()};
   const auto output_values{saved_output.span<T>()};
-  Tensor contribution{saved_output.shape(), saved_output.dtype()};
+  detail::validate_same_device(gradient, saved_output, "softmax backward");
+  Tensor contribution{saved_output.shape(), saved_output.dtype(), saved_output.device()};
   auto contribution_values{contribution.span<T>()};
   const T nan{numeric_limits<T>::quiet_NaN()};
   for (size_t outer_index{0}; outer_index < outer; ++outer_index) {
@@ -165,7 +166,8 @@ template <typename T> bool has_undefined_softmax_derivative(const Tensor& input)
 template <typename T>
 Tensor softmax_gradient(const Tensor& gradient, const Tensor& saved_output,
                         bool undefined_derivative) {
-  Tensor contribution{saved_output.shape(), saved_output.dtype()};
+  detail::validate_same_device(gradient, saved_output, "softmax backward");
+  Tensor contribution{saved_output.shape(), saved_output.dtype(), saved_output.device()};
   if (undefined_derivative) {
     contribution.fill<T>(numeric_limits<T>::quiet_NaN());
     return contribution;
@@ -192,7 +194,7 @@ template <typename T> Tensor softmax_values(const Tensor& input) {
   size_t positive_infinity_count{0};
   for (const T value : input_values) {
     if (isnan(value)) {
-      Tensor output{input.shape(), input.dtype()};
+      Tensor output{input.shape(), input.dtype(), input.device()};
       output.fill<T>(not_a_number);
       return output;
     }
@@ -201,7 +203,7 @@ template <typename T> Tensor softmax_values(const Tensor& input) {
     }
   }
 
-  Tensor output{input.shape(), input.dtype()};
+  Tensor output{input.shape(), input.dtype(), input.device()};
   auto output_values{output.span<T>()};
 
   if (positive_infinity_count != 0) {
@@ -305,7 +307,7 @@ LogSoftmaxResult log_softmax_values(const Tensor& input, optional<size_t> axis) 
     }
   }
 
-  Tensor output{input.shape(), input.dtype()};
+  Tensor output{input.shape(), input.dtype(), input.device()};
   auto values{output.span<T>()};
   vector<unsigned char> undefined(outer * inner, 0);
   const T infinity{numeric_limits<T>::infinity()};
@@ -372,7 +374,8 @@ Tensor log_softmax_gradient(const Tensor& gradient, const Tensor& saved_output,
   }
   const auto upstream{gradient.span<T>()};
   const auto log_probabilities{saved_output.span<T>()};
-  Tensor contribution{saved_output.shape(), saved_output.dtype()};
+  detail::validate_same_device(gradient, saved_output, "log_softmax backward");
+  Tensor contribution{saved_output.shape(), saved_output.dtype(), saved_output.device()};
   auto result{contribution.span<T>()};
   const T nan{numeric_limits<T>::quiet_NaN()};
   for (size_t outer_index{0}; outer_index < outer; ++outer_index) {

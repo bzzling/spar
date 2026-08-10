@@ -44,7 +44,7 @@ Tensor nll_values(const Tensor& log_probabilities, span<const size_t> targets,
                   span<const size_t> source_rows, Shape output_shape) {
   const size_t classes{
       static_cast<size_t>(log_probabilities.shape()[log_probabilities.rank() - 1])};
-  Tensor output{std::move(output_shape), log_probabilities.dtype()};
+  Tensor output{std::move(output_shape), log_probabilities.dtype(), log_probabilities.device()};
   auto losses{output.span<T>()};
   for (size_t index{0}; index < targets.size(); ++index) {
     losses[index] =
@@ -58,7 +58,7 @@ Tensor nll_gradient(const Tensor& gradient, const Shape& log_probability_shape, 
                     span<const size_t> targets, span<const size_t> source_rows) {
   const size_t classes{
       static_cast<size_t>(log_probability_shape[log_probability_shape.rank() - 1])};
-  Tensor contribution{zeros(log_probability_shape, dtype)};
+  Tensor contribution{zeros(log_probability_shape, dtype, gradient.device())};
   auto values{contribution.span<T>()};
   const auto upstream{gradient.span<T>()};
   for (size_t index{0}; index < targets.size(); ++index) {
@@ -116,6 +116,7 @@ void validate_logits(const Tensor& logits) {
 } // namespace
 
 Tensor cross_entropy(const Tensor& logits, const Tensor& targets, Reduction reduction) {
+  detail::validate_same_device(logits, targets, "cross_entropy");
   validate_logits(logits);
   if (targets.numel() == 0) {
     throw invalid_argument{"cross_entropy requires at least one target"};
@@ -138,6 +139,7 @@ Tensor cross_entropy(const Tensor& logits, const Tensor& targets, Reduction redu
 
 Tensor language_model_cross_entropy(const Tensor& logits, const Tensor& token_ids,
                                     Reduction reduction) {
+  detail::validate_same_device(logits, token_ids, "language_model_cross_entropy");
   validate_logits(logits);
   if (logits.rank() != 3 || token_ids.rank() != 2) {
     throw invalid_argument{"language_model_cross_entropy requires logits [B,T,V] and IDs [B,T]"};

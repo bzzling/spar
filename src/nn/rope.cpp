@@ -33,7 +33,7 @@ void validate_rope(const Tensor& input, size_t start_position, double theta) {
 
 template <typename T>
 Tensor rotate(const Tensor& input, size_t start_position, double theta, bool inverse) {
-  Tensor output{input.shape(), input.dtype()};
+  Tensor output{input.shape(), input.dtype(), input.device()};
   if (input.numel() == 0) {
     return output;
   }

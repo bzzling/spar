@@ -20,7 +20,7 @@ void validate_scalar_input(const Tensor& input) {
 
 template <typename T, typename Operation>
 Tensor apply_scalar(const Tensor& input, T scalar, Operation operation) {
-  Tensor output{input.shape(), input.dtype()};
+  Tensor output{input.shape(), input.dtype(), input.device()};
   const auto input_values{input.span<T>()};
   auto output_values{output.span<T>()};
 

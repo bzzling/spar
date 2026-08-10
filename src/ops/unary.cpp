@@ -22,7 +22,7 @@ void validate_unary_input(const Tensor& input) {
 
 template <typename T, typename Operation>
 Tensor apply_unary(const Tensor& input, Operation operation) {
-  Tensor output{input.shape(), input.dtype()};
+  Tensor output{input.shape(), input.dtype(), input.device()};
   const auto input_values{input.span<T>()};
   auto output_values{output.span<T>()};
 

@@ -12,6 +12,7 @@ namespace spar {
 namespace {
 
 Shape validate_binary_inputs(const Tensor& a, const Tensor& b) {
+  detail::validate_same_device(a, b, "Elementwise operation");
   if (a.dtype() != b.dtype()) {
     throw invalid_argument{"Elementwise operations require identical dtypes"};
   }
@@ -24,7 +25,7 @@ Shape validate_binary_inputs(const Tensor& a, const Tensor& b) {
 template <typename T, typename Operation>
 Tensor binary_values(const Tensor& a, const Tensor& b, const Shape& output_shape,
                      Operation operation) {
-  Tensor output{output_shape, a.dtype()};
+  Tensor output{output_shape, a.dtype(), a.device()};
   const auto expanded_a{a.detach().expand(output_shape)};
   const auto expanded_b{b.detach().expand(output_shape)};
   auto output_values{output.span<T>()};
