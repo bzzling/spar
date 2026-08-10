@@ -14,6 +14,7 @@ export namespace spar::detail {
 struct AutogradAccess;
 struct AutogradMeta;
 template <typename T> T logical_value(const spar::Tensor& tensor, std::size_t logical_index);
+void copy_tensor_values(spar::Tensor& destination, const spar::Tensor& source);
 } // namespace spar::detail
 
 export namespace spar {
@@ -59,6 +60,8 @@ public:
   /// Shares value Storage while creating a fresh leaf identity with no graph history.
   /// Mutations through a detached alias are explicit and are not version-checked yet.
   [[nodiscard]] Tensor detach() const;
+  /// Transfers logical values synchronously; a same-Device transfer preserves Tensor identity.
+  [[nodiscard]] Tensor to(Device target) const;
 
   /// always returns an independent contiguous row-major copy in logical element order.
   [[nodiscard]] Tensor clone() const;
@@ -110,6 +113,8 @@ private:
   friend struct detail::AutogradAccess;
   template <typename T>
   friend T detail::logical_value(const Tensor& tensor, std::size_t logical_index);
+  friend void detail::copy_tensor_values(Tensor& destination, const Tensor& source);
+  friend Tensor zeros(Shape shape, DType dtype, Device device);
 
   Tensor(std::shared_ptr<detail::Storage> storage, DType dtype, Shape shape,
          std::vector<Shape::stride_type> strides, std::size_t storage_offset);
@@ -119,7 +124,10 @@ private:
   void validate_view_bounds() const;
 
   [[nodiscard]] static std::size_t checked_nbytes(std::size_t numel, DType dtype);
+  [[nodiscard]] std::size_t checked_storage_byte_offset() const;
   [[nodiscard]] Tensor materialize_contiguous() const;
+  [[nodiscard]] Tensor materialize_values(Device target) const;
+  [[nodiscard]] Tensor materialize_cpu_logical() const;
   [[nodiscard]] std::size_t logical_storage_index(std::size_t logical_index) const;
   [[nodiscard]] std::byte* mutable_host_data();
   [[nodiscard]] const std::byte* host_data() const;
@@ -155,9 +163,14 @@ void swap(Tensor& left, Tensor& right) noexcept;
 /// returns a contiguous tensor filled with `value`, inferring its dtype from `T`.
 template <typename T>
 [[nodiscard]] Tensor full(Shape shape, T value, Device device = Device::cpu()) {
-  Tensor tensor{std::move(shape), dtype_of<T>(), device};
-  tensor.fill<T>(value);
-  return tensor;
+  if (device.is_cpu()) {
+    Tensor tensor{std::move(shape), dtype_of<T>(), device};
+    tensor.fill<T>(value);
+    return tensor;
+  }
+  Tensor staging{std::move(shape), dtype_of<T>(), Device::cpu()};
+  staging.fill<T>(value);
+  return staging.to(device);
 }
 
 } // namespace spar
@@ -177,6 +190,8 @@ template <typename T> T logical_value(const Tensor& tensor, std::size_t logical_
 
 [[nodiscard]] Shape broadcast_shape(const Shape& left, const Shape& right);
 void validate_same_device(const Tensor& left, const Tensor& right, std::string_view operation);
+void require_cpu(const Tensor& tensor, std::string_view operation);
+void copy_tensor_values(Tensor& destination, const Tensor& source);
 [[nodiscard]] Tensor reduce_gradient_to_shape(const Tensor& gradient, const Shape& original_shape);
 
 /// Internal operation-recording hook; graph node types remain private to spar.tensor.
@@ -184,6 +199,7 @@ using BackwardFunction = std::function<std::vector<Tensor>(const Tensor&)>;
 
 void record_operation(Tensor& output, std::vector<Tensor> requiring_parents,
                       BackwardFunction backward);
+void record_transfer_operation(Tensor& output, Tensor requiring_parent, BackwardFunction backward);
 
 /// Internal semantic-identity predicate used by value-semantic Parameter handles.
 [[nodiscard]] bool shares_autograd_identity(const Tensor& left, const Tensor& right) noexcept;

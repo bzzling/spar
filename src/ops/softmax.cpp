@@ -10,6 +10,7 @@ namespace spar {
 namespace {
 
 void validate_softmax_input(const Tensor& input) {
+  detail::require_cpu(input, "softmax");
   if (input.dtype() != DType::Float32 && input.dtype() != DType::Float64) {
     throw invalid_argument{"softmax currently supports floating-point dtypes only"};
   }
@@ -22,6 +23,7 @@ void validate_softmax_input(const Tensor& input) {
 }
 
 void validate_axis_softmax_input(const Tensor& input, size_t axis) {
+  detail::require_cpu(input, "softmax");
   if (input.dtype() != DType::Float32 && input.dtype() != DType::Float64) {
     throw invalid_argument{"softmax currently supports floating-point dtypes only"};
   }
@@ -398,6 +400,7 @@ Tensor log_softmax_gradient(const Tensor& gradient, const Tensor& saved_output,
 }
 
 Tensor log_softmax_impl(const Tensor& input, optional<size_t> axis) {
+  detail::require_cpu(input, "log_softmax");
   if (input.dtype() != DType::Float32 && input.dtype() != DType::Float64) {
     throw invalid_argument{"log_softmax supports floating-point dtypes only"};
   }

@@ -21,6 +21,7 @@ struct MatmulPlan final {
 
 MatmulPlan plan_matmul(const Tensor& a, const Tensor& b) {
   detail::validate_same_device(a, b, "matmul");
+  detail::require_cpu(a, "matmul");
   if (a.rank() < 2 || b.rank() < 2) {
     throw invalid_argument{"matmul requires tensors with rank at least 2"};
   }

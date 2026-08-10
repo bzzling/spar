@@ -43,6 +43,11 @@ include(CMakePackageConfigHelpers)
 
 option(SPAR_BUILD_TESTS "Build Spar tests" OFF)
 option(SPAR_BUILD_EXAMPLES "Build Spar examples" OFF)
+option(SPAR_ENABLE_CUDA "Enable Spar CUDA storage and transfer support" OFF)
+
+if(SPAR_ENABLE_CUDA)
+    find_package(CUDAToolkit REQUIRED)
+endif()
 
 if(NOT CMAKE_GENERATOR MATCHES "^Ninja")
     message(FATAL_ERROR
@@ -164,6 +169,26 @@ target_sources(spar
             src/optim/optim.cppm
             src/optim/adamw.cppm
 )
+
+target_sources(spar
+    PRIVATE
+        FILE_SET spar_private_modules TYPE CXX_MODULES
+        BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        FILES
+            src/backend/cuda_runtime.cppm
+)
+
+if(SPAR_ENABLE_CUDA)
+    set_property(SOURCE src/backend/cuda_runtime.cppm
+        PROPERTY COMPILE_DEFINITIONS SPAR_ENABLE_CUDA=1)
+else()
+    set_property(SOURCE src/backend/cuda_runtime.cppm
+        PROPERTY COMPILE_DEFINITIONS SPAR_ENABLE_CUDA=0)
+endif()
+
+if(SPAR_ENABLE_CUDA)
+    target_link_libraries(spar PRIVATE CUDA::cudart)
+endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(spar PRIVATE

@@ -1,5 +1,10 @@
 @PACKAGE_INIT@
 
+if(@SPAR_ENABLE_CUDA@)
+    include(CMakeFindDependencyMacro)
+    find_dependency(CUDAToolkit)
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/SparTargets.cmake")
 
 check_required_components(Spar)

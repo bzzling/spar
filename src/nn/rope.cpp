@@ -11,6 +11,7 @@ namespace spar::nn {
 namespace {
 
 void validate_rope(const Tensor& input, size_t start_position, double theta) {
+  detail::require_cpu(input, "RoPE");
   if (input.rank() < 2) {
     throw invalid_argument{"apply_rope input must have rank at least 2"};
   }

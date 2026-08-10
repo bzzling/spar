@@ -12,6 +12,7 @@ namespace spar {
 namespace {
 
 void validate_unary_input(const Tensor& input) {
+  detail::require_cpu(input, "Unary operation");
   if (input.dtype() != DType::Float32 && input.dtype() != DType::Float64) {
     throw invalid_argument{"Unary operations currently support floating-point dtypes only"};
   }

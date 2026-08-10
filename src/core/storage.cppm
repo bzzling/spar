@@ -14,17 +14,20 @@ public:
   Storage& operator=(const Storage&) = delete;
   Storage(Storage&&) = delete;
   Storage& operator=(Storage&&) = delete;
-  ~Storage();
+  ~Storage() noexcept;
 
   [[nodiscard]] std::byte* host_data();
   [[nodiscard]] const std::byte* host_data() const;
+  [[nodiscard]] void* cuda_data();
+  [[nodiscard]] const void* cuda_data() const;
   [[nodiscard]] Device device() const noexcept;
   [[nodiscard]] std::size_t nbytes() const noexcept;
 
 private:
   std::size_t nbytes_;
   Device device_;
-  std::unique_ptr<std::byte[]> data_;
+  std::unique_ptr<std::byte[]> host_data_;
+  void* cuda_data_;
 };
 
 } // namespace spar::detail

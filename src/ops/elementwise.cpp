@@ -13,6 +13,7 @@ namespace {
 
 Shape validate_binary_inputs(const Tensor& a, const Tensor& b) {
   detail::validate_same_device(a, b, "Elementwise operation");
+  detail::require_cpu(a, "Elementwise operation");
   if (a.dtype() != b.dtype()) {
     throw invalid_argument{"Elementwise operations require identical dtypes"};
   }

@@ -80,8 +80,8 @@ AdamW::AdamW(vector<nn::Parameter> parameters, double learning_rate, double beta
 }
 
 void AdamW::step() {
-  for (Entry& entry : entries_) {
-    nn::Parameter& parameter{entry.parameter};
+  for (const Entry& entry : entries_) {
+    const nn::Parameter& parameter{entry.parameter};
     if (!parameter.requires_grad() || !parameter.has_grad()) {
       continue;
     }
@@ -91,6 +91,15 @@ void AdamW::step() {
         gradient.device() != parameter.tensor().device()) {
       throw logic_error{"AdamW gradient shape, dtype, or Device does not match its Parameter"};
     }
+    detail::require_cpu(parameter.tensor(), "AdamW step");
+  }
+
+  for (Entry& entry : entries_) {
+    nn::Parameter& parameter{entry.parameter};
+    if (!parameter.requires_grad() || !parameter.has_grad()) {
+      continue;
+    }
+    const Tensor gradient{parameter.grad()};
     if (!entry.state) {
       entry.state.emplace(zeros(parameter.tensor().shape(), parameter.tensor().dtype(),
                                 parameter.tensor().device()),

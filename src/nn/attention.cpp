@@ -30,6 +30,7 @@ AttentionShape validate_attention(const Tensor& query, const Tensor& key, const 
                                   bool causal) {
   detail::validate_same_device(query, key, "scaled_dot_product_attention");
   detail::validate_same_device(query, value, "scaled_dot_product_attention");
+  detail::require_cpu(query, "scaled_dot_product_attention");
   if (query.rank() != 4 || key.rank() != 4 || value.rank() != 4) {
     throw invalid_argument{"scaled_dot_product_attention requires rank-4 Q, K, and V"};
   }

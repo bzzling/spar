@@ -12,6 +12,7 @@ namespace spar {
 namespace {
 
 void validate_reduction_input(const Tensor& input) {
+  detail::require_cpu(input, "Reduction");
   if (input.dtype() != DType::Float32 && input.dtype() != DType::Float64) {
     throw invalid_argument{"Reductions currently support floating-point dtypes only"};
   }

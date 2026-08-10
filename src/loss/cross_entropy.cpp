@@ -117,6 +117,7 @@ void validate_logits(const Tensor& logits) {
 
 Tensor cross_entropy(const Tensor& logits, const Tensor& targets, Reduction reduction) {
   detail::validate_same_device(logits, targets, "cross_entropy");
+  detail::require_cpu(logits, "cross_entropy");
   validate_logits(logits);
   if (targets.numel() == 0) {
     throw invalid_argument{"cross_entropy requires at least one target"};
@@ -140,6 +141,7 @@ Tensor cross_entropy(const Tensor& logits, const Tensor& targets, Reduction redu
 Tensor language_model_cross_entropy(const Tensor& logits, const Tensor& token_ids,
                                     Reduction reduction) {
   detail::validate_same_device(logits, token_ids, "language_model_cross_entropy");
+  detail::require_cpu(logits, "language_model_cross_entropy");
   validate_logits(logits);
   if (logits.rank() != 3 || token_ids.rank() != 2) {
     throw invalid_argument{"language_model_cross_entropy requires logits [B,T,V] and IDs [B,T]"};

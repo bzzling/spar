@@ -86,6 +86,7 @@ double global_grad_norm(span<nn::Parameter> parameters) {
     if (gradient.device() != parameter->tensor().device()) {
       throw logic_error{"Active Parameter gradient Device mismatch"};
     }
+    detail::require_cpu(gradient, "global_grad_norm");
     switch (gradient.dtype()) {
     case DType::Float32:
       add_gradient_to_norm<float>(gradient, accumulator);
@@ -105,11 +106,16 @@ void scale_gradients(span<nn::Parameter> parameters, double factor) {
   if (!isfinite(factor)) {
     throw invalid_argument{"Gradient scale factor must be finite"};
   }
-  for (nn::Parameter* parameter : unique_active_parameters(parameters)) {
-    Tensor gradient{parameter->grad()};
+  const auto active{unique_active_parameters(parameters)};
+  for (const nn::Parameter* parameter : active) {
+    const Tensor gradient{parameter->grad()};
     if (gradient.device() != parameter->tensor().device()) {
       throw logic_error{"Active Parameter gradient Device mismatch"};
     }
+    detail::require_cpu(gradient, "scale_gradients");
+  }
+  for (nn::Parameter* parameter : active) {
+    Tensor gradient{parameter->grad()};
     switch (gradient.dtype()) {
     case DType::Float32:
       scale_gradient<float>(gradient, factor);

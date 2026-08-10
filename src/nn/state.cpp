@@ -9,39 +9,6 @@ import spar.tensor;
 using namespace std;
 
 namespace spar::nn {
-namespace {
-
-template <typename T> void copy_logical(Tensor& destination, const Tensor& source) {
-  auto output{destination.span<T>()};
-  if (source.is_contiguous()) {
-    ranges::copy(source.span<T>(), output.begin());
-    return;
-  }
-  for (size_t index{0}; index < output.size(); ++index) {
-    output[index] = detail::logical_value<T>(source, index);
-  }
-}
-
-void copy_tensor(Tensor& destination, const Tensor& source) {
-  detail::validate_same_device(destination, source, "state Tensor copy");
-  switch (destination.dtype()) {
-  case DType::Float32:
-    copy_logical<float>(destination, source);
-    break;
-  case DType::Float64:
-    copy_logical<double>(destination, source);
-    break;
-  case DType::Int32:
-    copy_logical<int32_t>(destination, source);
-    break;
-  case DType::Int64:
-    copy_logical<int64_t>(destination, source);
-    break;
-  }
-}
-
-} // namespace
-
 vector<NamedTensor> state_dict(DecoderLM& model) {
   vector<NamedTensor> result;
   const auto named{named_parameters(model)};
@@ -82,7 +49,7 @@ void load_state_dict(DecoderLM& model, span<const NamedTensor> state) {
   }
   for (const NamedParameter& expected : destination) {
     Tensor target{expected.parameter.tensor().detach()};
-    copy_tensor(target, incoming.at(expected.name)->value);
+    detail::copy_tensor_values(target, incoming.at(expected.name)->value);
   }
 }
 

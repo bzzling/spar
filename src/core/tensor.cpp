@@ -1,6 +1,7 @@
 module spar.tensor;
 
 import std;
+import spar.cuda_runtime;
 import spar.device;
 import spar.dtype;
 import spar.shape;
@@ -114,8 +115,21 @@ bool Tensor::is_contiguous() const noexcept {
   return true;
 }
 
-Tensor Tensor::materialize_contiguous() const {
-  Tensor output{shape_, dtype_, device()};
+size_t Tensor::checked_storage_byte_offset() const {
+  const size_t element_size{size_of(dtype_)};
+  if (storage_offset_ > numeric_limits<size_t>::max() / element_size) {
+    throw overflow_error{"Tensor Storage byte offset overflow"};
+  }
+  const size_t offset{storage_offset_ * element_size};
+  if (storage_ == nullptr || offset > storage_->nbytes() || nbytes_ > storage_->nbytes() - offset) {
+    throw logic_error{"Contiguous Tensor region exceeds Storage bounds"};
+  }
+  return offset;
+}
+
+Tensor Tensor::materialize_cpu_logical() const {
+  detail::require_cpu(*this, "Tensor materialization");
+  Tensor output{shape_, dtype_, Device::cpu()};
   const auto copy_values = [this, &output]<typename T> {
     const auto source_base{reinterpret_cast<const T*>(host_data())};
     auto destination_values{output.span<T>()};
@@ -138,6 +152,48 @@ Tensor Tensor::materialize_contiguous() const {
     break;
   }
   return output;
+}
+
+Tensor Tensor::materialize_values(Device target) const {
+  if (!is_contiguous()) {
+    if (device().is_cpu()) {
+      Tensor staging{materialize_cpu_logical()};
+      return target.is_cpu() ? staging : staging.materialize_values(target);
+    }
+
+    auto host_storage{make_shared<detail::Storage>(storage_->nbytes(), Device::cpu())};
+    detail::cuda::copy_device_to_host(host_storage->host_data(), storage_->cuda_data(),
+                                      device().index(), storage_->nbytes());
+    Tensor host_view{std::move(host_storage), dtype_, shape_, strides_, storage_offset_};
+    Tensor staging{host_view.materialize_cpu_logical()};
+    return target.is_cpu() ? staging : staging.materialize_values(target);
+  }
+
+  Tensor output{shape_, dtype_, target};
+  if (nbytes_ == 0) {
+    return output;
+  }
+
+  const size_t source_offset{checked_storage_byte_offset()};
+  if (device().is_cpu() && target.is_cpu()) {
+    memcpy(output.storage_->host_data(), storage_->host_data() + source_offset, nbytes_);
+  } else if (device().is_cpu()) {
+    detail::cuda::copy_host_to_device(output.storage_->cuda_data(), target.index(),
+                                      storage_->host_data() + source_offset, nbytes_);
+  } else if (target.is_cpu()) {
+    const auto* source{static_cast<const byte*>(storage_->cuda_data()) + source_offset};
+    detail::cuda::copy_device_to_host(output.storage_->host_data(), source, device().index(),
+                                      nbytes_);
+  } else {
+    const auto* source{static_cast<const byte*>(storage_->cuda_data()) + source_offset};
+    detail::cuda::copy_device_to_device(output.storage_->cuda_data(), target.index(), source,
+                                        device().index(), nbytes_);
+  }
+  return output;
+}
+
+Tensor Tensor::materialize_contiguous() const {
+  return materialize_values(device());
 }
 
 Tensor Tensor::clone() const {
@@ -272,6 +328,20 @@ Tensor Tensor::detach() const {
   return Tensor{storage_, dtype_, shape_, strides_, storage_offset_};
 }
 
+Tensor Tensor::to(Device target) const {
+  if (target == device()) {
+    return *this;
+  }
+  auto output{materialize_values(target)};
+  if (requires_grad()) {
+    const Device source_device{device()};
+    detail::record_transfer_operation(output, *this, [source_device](const Tensor& gradient) {
+      return vector<Tensor>{gradient.to(source_device)};
+    });
+  }
+  return output;
+}
+
 size_t Tensor::checked_nbytes(size_t numel, DType dtype) {
   const auto element_size{size_of(dtype)};
   if (numel != 0 && element_size > numeric_limits<size_t>::max() / numel) {
@@ -341,6 +411,10 @@ void swap(Tensor& left, Tensor& right) noexcept {
 
 Tensor zeros(Shape shape, DType dtype, Device device) {
   Tensor tensor{std::move(shape), dtype, device};
+  if (device.is_cuda()) {
+    detail::cuda::zero(tensor.storage_->cuda_data(), device.index(), tensor.nbytes());
+    return tensor;
+  }
   switch (dtype) {
   case DType::Float32:
     tensor.fill<float>(0.0F);
@@ -359,6 +433,18 @@ Tensor zeros(Shape shape, DType dtype, Device device) {
 }
 
 Tensor ones(Shape shape, DType dtype, Device device) {
+  if (device.is_cuda()) {
+    switch (dtype) {
+    case DType::Float32:
+      return full<float>(std::move(shape), 1.0F, device);
+    case DType::Float64:
+      return full<double>(std::move(shape), 1.0, device);
+    case DType::Int32:
+      return full<int32_t>(std::move(shape), 1, device);
+    case DType::Int64:
+      return full<int64_t>(std::move(shape), 1, device);
+    }
+  }
   Tensor tensor{std::move(shape), dtype, device};
   switch (dtype) {
   case DType::Float32:
@@ -380,6 +466,37 @@ Tensor ones(Shape shape, DType dtype, Device device) {
 } // namespace spar
 
 namespace spar::detail {
+
+void require_cpu(const Tensor& tensor, string_view operation) {
+  if (!tensor.device().is_cpu()) {
+    throw runtime_error{string{operation} + " CUDA implementation is not available"};
+  }
+}
+
+void copy_tensor_values(Tensor& destination, const Tensor& source) {
+  validate_same_device(destination, source, "Tensor value copy");
+  if (destination.shape() != source.shape() || destination.dtype() != source.dtype()) {
+    throw invalid_argument{"Tensor value copy requires identical shapes and dtypes"};
+  }
+  if (!destination.is_contiguous()) {
+    throw invalid_argument{"Tensor value copy requires a contiguous destination"};
+  }
+
+  Tensor materialized{source.materialize_values(destination.device())};
+  if (destination.nbytes_ == 0) {
+    return;
+  }
+  const size_t destination_offset{destination.checked_storage_byte_offset()};
+  if (destination.device().is_cpu()) {
+    memcpy(destination.storage_->host_data() + destination_offset,
+           materialized.storage_->host_data(), destination.nbytes_);
+  } else {
+    auto* output{static_cast<byte*>(destination.storage_->cuda_data()) + destination_offset};
+    cuda::copy_device_to_device(output, destination.device().index(),
+                                materialized.storage_->cuda_data(), materialized.device().index(),
+                                destination.nbytes_);
+  }
+}
 
 void validate_same_device(const Tensor& left, const Tensor& right, string_view operation) {
   if (left.device() != right.device()) {
@@ -441,6 +558,10 @@ Tensor reduce_gradient_to_shape(const Tensor& gradient, const Shape& original_sh
   }
   if (gradient.shape() != broadcast_shape(gradient.shape(), original_shape)) {
     throw logic_error{"Gradient shape cannot be reduced to the requested broadcast parent shape"};
+  }
+  if (gradient.device().is_cuda()) {
+    const Tensor host_gradient{gradient.to(Device::cpu())};
+    return reduce_gradient_to_shape(host_gradient, original_shape).to(gradient.device());
   }
 
   Tensor result{zeros(original_shape, gradient.dtype(), gradient.device())};

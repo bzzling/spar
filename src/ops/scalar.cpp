@@ -10,6 +10,7 @@ namespace spar {
 namespace {
 
 void validate_scalar_input(const Tensor& input) {
+  detail::require_cpu(input, "Scalar arithmetic");
   if (input.dtype() != DType::Float32 && input.dtype() != DType::Float64) {
     throw invalid_argument{"Scalar operations currently support floating-point dtypes only"};
   }

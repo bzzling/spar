@@ -9,8 +9,7 @@ enum class DeviceType : std::uint8_t {
   CUDA,
 };
 
-/// Runtime tensor placement. CUDA values describe a future placement target; CUDA allocation is
-/// deliberately unsupported until Spar has a real CUDA backend.
+/// Runtime tensor placement. CUDA allocation requires Spar's optional CUDA backend.
 class Device final {
 public:
   [[nodiscard]] static constexpr Device cpu() noexcept {

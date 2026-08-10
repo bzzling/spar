@@ -66,6 +66,24 @@ void record_operation(Tensor& output, vector<Tensor> requiring_parents, Backward
       make_shared<AutogradNode>(AutogradNode{std::move(edges), std::move(backward)});
 }
 
+void record_transfer_operation(Tensor& output, Tensor requiring_parent, BackwardFunction backward) {
+  if (!requiring_parent.requires_grad()) {
+    throw logic_error{"Cannot record a transfer from a non-requiring parent"};
+  }
+  if (requiring_parent.device() == output.device()) {
+    throw logic_error{"Transfer autograd nodes require different source and destination Devices"};
+  }
+
+  vector<AutogradEdge> edges;
+  edges.push_back(AutogradEdge{AutogradAccess::meta(requiring_parent), requiring_parent.shape(),
+                               requiring_parent.dtype(), requiring_parent.device()});
+  auto& output_meta{AutogradAccess::meta(output)};
+  output_meta = make_shared<AutogradMeta>();
+  output_meta->requires_grad = true;
+  output_meta->grad_fn =
+      make_shared<AutogradNode>(AutogradNode{std::move(edges), std::move(backward)});
+}
+
 bool shares_autograd_identity(const Tensor& left, const Tensor& right) noexcept {
   const auto& left_meta{AutogradAccess::meta(left)};
   const auto& right_meta{AutogradAccess::meta(right)};
@@ -84,6 +102,14 @@ void add_gradient_values(Tensor& destination, const Tensor& contribution) {
   }
   if (!destination.is_contiguous() || !contribution.is_contiguous()) {
     throw logic_error{"Internal gradient accumulation requires contiguous tensors"};
+  }
+  if (destination.device().is_cuda()) {
+    Tensor host_destination{destination.to(Device::cpu())};
+    const Tensor host_contribution{contribution.to(Device::cpu())};
+    add_gradient_values(host_destination, host_contribution);
+    const Tensor updated{host_destination.to(destination.device())};
+    detail::copy_tensor_values(destination, updated);
+    return;
   }
 
   const auto add_values = [&destination, &contribution]<typename T> {

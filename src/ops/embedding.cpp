@@ -12,6 +12,7 @@ namespace {
 
 void validate_embedding_inputs(const Tensor& weight, const Tensor& indices) {
   detail::validate_same_device(weight, indices, "embedding_lookup");
+  detail::require_cpu(weight, "embedding_lookup");
   if (weight.rank() != 2) {
     throw invalid_argument{"embedding_lookup weight must have rank 2"};
   }
