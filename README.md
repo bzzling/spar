@@ -19,13 +19,14 @@ standard-library module support.
 
 ```sh
 cmake -S . -B build -G Ninja \
-  -DCMAKE_CXX_COMPILER=clang++ \
-  -DSPAR_BUILD_TESTS=ON \
-  -DSPAR_BUILD_EXAMPLES=ON
+  -DCMAKE_CXX_COMPILER=clang++
 cmake --build build
-ctest --test-dir build --output-on-failure
-./build/examples/spar_tensor_example
 ```
+
+Spar's larger validation suite and examples are currently local development material and are not
+shipped in the public repository. Developers with those trees available may enable
+`SPAR_BUILD_TESTS` and `SPAR_BUILD_EXAMPLES`; enabling either option without its corresponding local
+directory produces an intentional configuration error.
 
 The project intentionally has no third-party ML, testing, formatting, or logging dependencies.
 CUDA, mixed precision, fused kernels, distributed training, generation, and KV caching are not yet
