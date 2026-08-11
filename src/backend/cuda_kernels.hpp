@@ -10,6 +10,8 @@ extern "C" {
 enum SparCudaDType {
   SPAR_CUDA_FLOAT32 = 0,
   SPAR_CUDA_FLOAT64 = 1,
+  SPAR_CUDA_INT32 = 2,
+  SPAR_CUDA_INT64 = 3,
 };
 
 enum SparCudaBinaryOp {
@@ -59,6 +61,22 @@ struct SparCudaStatus spar_cuda_launch_probability_forward(void* output, int32_t
 struct SparCudaStatus spar_cuda_launch_probability_backward(
     void* output, const void* gradient, const void* saved_output, const int32_t* undefined_slices,
     uint64_t outer, uint64_t axis_extent, uint64_t inner, int dtype, int logarithmic, int device);
+struct SparCudaStatus
+spar_cuda_launch_embedding_forward(void* output, int32_t* invalid_index, const void* weight,
+                                   const void* indices, uint64_t index_count,
+                                   uint64_t vocabulary_size, uint64_t embedding_dimension,
+                                   int weight_dtype, int index_dtype, int device);
+struct SparCudaStatus spar_cuda_launch_embedding_backward(void* output, const void* gradient,
+                                                          const void* indices, uint64_t index_count,
+                                                          uint64_t embedding_dimension,
+                                                          int weight_dtype, int index_dtype,
+                                                          int device);
+struct SparCudaStatus spar_cuda_launch_rope(void* output, const void* input, uint64_t pair_count,
+                                            uint64_t sequence_length, uint64_t feature_count,
+                                            uint64_t start_position, double theta, int dtype,
+                                            int inverse, int device);
+struct SparCudaStatus spar_cuda_launch_causal_mask(void* output, uint64_t sequence_length,
+                                                   int dtype, int device);
 struct SparCudaStatus spar_cuda_launch_fill_from_scalar(void* output, const void* scalar,
                                                         uint64_t count, int dtype, double scale,
                                                         int device);

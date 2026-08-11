@@ -1,6 +1,7 @@
 module spar.nn.attention;
 
 import std;
+import spar.cuda_ops;
 import spar.dtype;
 import spar.nn.linear;
 import spar.nn.rmsnorm;
@@ -30,7 +31,6 @@ AttentionShape validate_attention(const Tensor& query, const Tensor& key, const 
                                   bool causal) {
   detail::validate_same_device(query, key, "scaled_dot_product_attention");
   detail::validate_same_device(query, value, "scaled_dot_product_attention");
-  detail::require_cpu(query, "scaled_dot_product_attention");
   if (query.rank() != 4 || key.rank() != 4 || value.rank() != 4) {
     throw invalid_argument{"scaled_dot_product_attention requires rank-4 Q, K, and V"};
   }
@@ -94,6 +94,9 @@ Tensor repeat_kv_heads(const Tensor& input, size_t query_heads) {
 }
 
 Tensor causal_mask(size_t sequence_length, DType dtype, Device device) {
+  if (device.is_cuda()) {
+    return detail::cuda_ops::causal_mask(sequence_length, dtype, device);
+  }
   const auto dimension{static_cast<Shape::dimension_type>(sequence_length)};
   Tensor mask{zeros(Shape{dimension, dimension}, dtype, device)};
   if (dtype == DType::Float32) {

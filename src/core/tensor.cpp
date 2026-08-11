@@ -519,6 +519,10 @@ void copy_tensor_values(Tensor& destination, const Tensor& source) {
   }
 }
 
+void swap_storage_payloads(Tensor& original, Tensor& staged) noexcept {
+  original.storage_->swap_payload(*staged.storage_);
+}
+
 void validate_same_device(const Tensor& left, const Tensor& right, string_view operation) {
   if (left.device() != right.device()) {
     throw invalid_argument{string{operation} + " requires tensors on the same Device"};

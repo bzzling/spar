@@ -22,6 +22,8 @@ public:
   [[nodiscard]] const void* cuda_data() const;
   [[nodiscard]] Device device() const noexcept;
   [[nodiscard]] std::size_t nbytes() const noexcept;
+  /// Exchanges allocation payloads while preserving both Storage object identities.
+  void swap_payload(Storage& other) noexcept;
 
 private:
   std::size_t nbytes_;

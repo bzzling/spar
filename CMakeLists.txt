@@ -178,6 +178,7 @@ target_sources(spar
         FILES
             src/backend/cuda_runtime.cppm
             src/backend/cuda_ops.cppm
+            src/backend/cuda_blas.cppm
 )
 
 set(SPAR_CUDA_COMPILED 0)
@@ -194,10 +195,11 @@ endif()
 set_property(SOURCE
     src/backend/cuda_runtime.cppm
     src/backend/cuda_ops.cppm
+    src/backend/cuda_blas.cppm
     PROPERTY COMPILE_DEFINITIONS SPAR_ENABLE_CUDA=${SPAR_CUDA_COMPILED})
 
 if(SPAR_ENABLE_CUDA)
-    target_link_libraries(spar PRIVATE CUDA::cudart)
+    target_link_libraries(spar PRIVATE CUDA::cudart CUDA::cublas)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")

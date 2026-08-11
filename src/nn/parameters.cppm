@@ -41,4 +41,8 @@ void zero_grad(SwiGLUMLP& layer);
 void zero_grad(TransformerBlock& layer);
 void zero_grad(DecoderLM& model);
 
+/// Transactionally migrates every unique DecoderLM Parameter while preserving aliases and ties.
+/// Call only at a graph boundary, before constructing the forward graph used for backward.
+void move_to(DecoderLM& model, Device target);
+
 } // namespace spar::nn

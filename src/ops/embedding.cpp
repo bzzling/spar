@@ -1,6 +1,7 @@
 module spar.ops.embedding;
 
 import std;
+import spar.cuda_ops;
 import spar.dtype;
 import spar.shape;
 import spar.tensor;
@@ -12,7 +13,6 @@ namespace {
 
 void validate_embedding_inputs(const Tensor& weight, const Tensor& indices) {
   detail::validate_same_device(weight, indices, "embedding_lookup");
-  detail::require_cpu(weight, "embedding_lookup");
   if (weight.rank() != 2) {
     throw invalid_argument{"embedding_lookup weight must have rank 2"};
   }
@@ -89,16 +89,26 @@ Tensor embedding_gradient(const Tensor& gradient, const Tensor& saved_indices,
 Tensor embedding_lookup(const Tensor& weight, const Tensor& indices) {
   validate_embedding_inputs(weight, indices);
   const size_t vocabulary_size{static_cast<size_t>(weight.shape()[0])};
-  const vector<size_t> tokens{validated_indices(indices, vocabulary_size)};
-  Tensor output{weight.dtype() == DType::Float32
-                    ? embedding_values<float>(weight, indices, tokens)
-                    : embedding_values<double>(weight, indices, tokens)};
+  Tensor output{[&] {
+    if (weight.device().is_cuda()) {
+      return detail::cuda_ops::embedding_forward(weight.detach().contiguous(),
+                                                 indices.detach().contiguous(),
+                                                 embedding_output_shape(weight, indices));
+    }
+    const vector<size_t> tokens{validated_indices(indices, vocabulary_size)};
+    return weight.dtype() == DType::Float32 ? embedding_values<float>(weight, indices, tokens)
+                                            : embedding_values<double>(weight, indices, tokens);
+  }()};
   if (weight.requires_grad()) {
     const Tensor saved_indices{indices.detach().clone()};
     const Shape weight_shape{weight.shape()};
     const DType dtype{weight.dtype()};
     detail::record_operation(
         output, {weight}, [saved_indices, weight_shape, dtype](const Tensor& gradient) {
+          if (gradient.device().is_cuda()) {
+            return vector<Tensor>{detail::cuda_ops::embedding_backward(
+                gradient.detach().contiguous(), saved_indices, weight_shape)};
+          }
           if (dtype == DType::Float32) {
             return vector<Tensor>{embedding_gradient<float>(gradient, saved_indices, weight_shape)};
           }

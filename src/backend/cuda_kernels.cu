@@ -381,8 +381,81 @@ __global__ void probability_backward_kernel(T* output, const T* gradient, const 
   }
 }
 
+template <typename T, typename Index>
+__global__ void embedding_forward_kernel(T* output, int32_t* invalid_index, const T* weight,
+                                         const Index* indices, uint64_t output_count,
+                                         uint64_t vocabulary_size, uint64_t embedding_dimension) {
+  const uint64_t start = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const uint64_t stride = static_cast<uint64_t>(blockDim.x) * gridDim.x;
+  for (uint64_t output_index = start; output_index < output_count; output_index += stride) {
+    const uint64_t position = output_index / embedding_dimension;
+    const uint64_t feature = output_index % embedding_dimension;
+    const Index token = indices[position];
+    if (token < 0 || static_cast<uint64_t>(token) >= vocabulary_size) {
+      atomicExch(invalid_index, 1);
+      continue;
+    }
+    output[output_index] = weight[static_cast<uint64_t>(token) * embedding_dimension + feature];
+  }
+}
+
+template <typename T, typename Index>
+__global__ void embedding_backward_kernel(T* output, const T* gradient, const Index* indices,
+                                          uint64_t gradient_count, uint64_t embedding_dimension) {
+  const uint64_t start = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const uint64_t stride = static_cast<uint64_t>(blockDim.x) * gridDim.x;
+  for (uint64_t gradient_index = start; gradient_index < gradient_count; gradient_index += stride) {
+    const uint64_t position = gradient_index / embedding_dimension;
+    const uint64_t feature = gradient_index % embedding_dimension;
+    const uint64_t token = static_cast<uint64_t>(indices[position]);
+    atomicAdd(output + token * embedding_dimension + feature, gradient[gradient_index]);
+  }
+}
+
+template <typename T>
+__global__ void rope_kernel(T* output, const T* input, uint64_t pair_count,
+                            uint64_t sequence_length, uint64_t feature_count,
+                            uint64_t start_position, double theta, bool inverse) {
+  const uint64_t start = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const uint64_t stride = static_cast<uint64_t>(blockDim.x) * gridDim.x;
+  const uint64_t pairs_per_token = feature_count / 2U;
+  for (uint64_t logical_pair = start; logical_pair < pair_count; logical_pair += stride) {
+    const uint64_t pair = logical_pair % pairs_per_token;
+    const uint64_t token = (logical_pair / pairs_per_token) % sequence_length;
+    const uint64_t index = (logical_pair / pairs_per_token) * feature_count + 2U * pair;
+    const double position = static_cast<double>(start_position + token);
+    const double exponent = -2.0 * static_cast<double>(pair) / static_cast<double>(feature_count);
+    const double angle = position * pow(theta, exponent);
+    const T cosine = static_cast<T>(cos(angle));
+    T sine = static_cast<T>(sin(angle));
+    if (inverse) {
+      sine = -sine;
+    }
+    const T first = input[index];
+    const T second = input[index + 1U];
+    output[index] = first * cosine - second * sine;
+    output[index + 1U] = first * sine + second * cosine;
+  }
+}
+
+template <typename T>
+__global__ void causal_mask_kernel(T* output, uint64_t count, uint64_t sequence_length) {
+  const uint64_t start = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const uint64_t stride = static_cast<uint64_t>(blockDim.x) * gridDim.x;
+  const T negative_infinity = -static_cast<T>(INFINITY);
+  for (uint64_t index = start; index < count; index += stride) {
+    const uint64_t row = index / sequence_length;
+    const uint64_t column = index % sequence_length;
+    output[index] = column <= row ? T{0} : negative_infinity;
+  }
+}
+
 bool valid_dtype(int dtype) {
   return dtype == SPAR_CUDA_FLOAT32 || dtype == SPAR_CUDA_FLOAT64;
+}
+
+bool valid_index_dtype(int dtype) {
+  return dtype == SPAR_CUDA_INT32 || dtype == SPAR_CUDA_INT64;
 }
 
 } // namespace
@@ -596,6 +669,149 @@ extern "C" SparCudaStatus spar_cuda_launch_probability_backward(
         static_cast<double*>(output), static_cast<const double*>(gradient),
         static_cast<const double*>(saved_output), undefined_slices, outer, axis_extent, inner,
         logarithmic != 0);
+  }
+  return finish_launch(previous, changed);
+}
+
+extern "C" SparCudaStatus
+spar_cuda_launch_embedding_forward(void* output, int32_t* invalid_index, const void* weight,
+                                   const void* indices, uint64_t index_count,
+                                   uint64_t vocabulary_size, uint64_t embedding_dimension,
+                                   int weight_dtype, int index_dtype, int device) {
+  if (!valid_dtype(weight_dtype) || !valid_index_dtype(index_dtype) || vocabulary_size == 0 ||
+      embedding_dimension == 0 || invalid_index == nullptr ||
+      index_count > UINT64_MAX / embedding_dimension) {
+    return invalid_argument();
+  }
+  const uint64_t output_count = index_count * embedding_dimension;
+  if (output_count == 0) {
+    return success();
+  }
+  if (output == nullptr || weight == nullptr || indices == nullptr) {
+    return invalid_argument();
+  }
+  int previous = 0;
+  bool changed = false;
+  SparCudaStatus status = select_device(device, &previous, &changed);
+  if (status.code != 0) {
+    return status;
+  }
+  const unsigned int blocks = block_count(output_count);
+  if (weight_dtype == SPAR_CUDA_FLOAT32 && index_dtype == SPAR_CUDA_INT32) {
+    embedding_forward_kernel<<<blocks, threads_per_block>>>(
+        static_cast<float*>(output), invalid_index, static_cast<const float*>(weight),
+        static_cast<const int32_t*>(indices), output_count, vocabulary_size, embedding_dimension);
+  } else if (weight_dtype == SPAR_CUDA_FLOAT32) {
+    embedding_forward_kernel<<<blocks, threads_per_block>>>(
+        static_cast<float*>(output), invalid_index, static_cast<const float*>(weight),
+        static_cast<const int64_t*>(indices), output_count, vocabulary_size, embedding_dimension);
+  } else if (index_dtype == SPAR_CUDA_INT32) {
+    embedding_forward_kernel<<<blocks, threads_per_block>>>(
+        static_cast<double*>(output), invalid_index, static_cast<const double*>(weight),
+        static_cast<const int32_t*>(indices), output_count, vocabulary_size, embedding_dimension);
+  } else {
+    embedding_forward_kernel<<<blocks, threads_per_block>>>(
+        static_cast<double*>(output), invalid_index, static_cast<const double*>(weight),
+        static_cast<const int64_t*>(indices), output_count, vocabulary_size, embedding_dimension);
+  }
+  return finish_launch(previous, changed);
+}
+
+extern "C" SparCudaStatus
+spar_cuda_launch_embedding_backward(void* output, const void* gradient, const void* indices,
+                                    uint64_t index_count, uint64_t embedding_dimension,
+                                    int weight_dtype, int index_dtype, int device) {
+  if (!valid_dtype(weight_dtype) || !valid_index_dtype(index_dtype) || embedding_dimension == 0 ||
+      index_count > UINT64_MAX / embedding_dimension) {
+    return invalid_argument();
+  }
+  const uint64_t gradient_count = index_count * embedding_dimension;
+  if (gradient_count == 0) {
+    return success();
+  }
+  if (output == nullptr || gradient == nullptr || indices == nullptr) {
+    return invalid_argument();
+  }
+  int previous = 0;
+  bool changed = false;
+  SparCudaStatus status = select_device(device, &previous, &changed);
+  if (status.code != 0) {
+    return status;
+  }
+  const unsigned int blocks = block_count(gradient_count);
+  if (weight_dtype == SPAR_CUDA_FLOAT32 && index_dtype == SPAR_CUDA_INT32) {
+    embedding_backward_kernel<<<blocks, threads_per_block>>>(
+        static_cast<float*>(output), static_cast<const float*>(gradient),
+        static_cast<const int32_t*>(indices), gradient_count, embedding_dimension);
+  } else if (weight_dtype == SPAR_CUDA_FLOAT32) {
+    embedding_backward_kernel<<<blocks, threads_per_block>>>(
+        static_cast<float*>(output), static_cast<const float*>(gradient),
+        static_cast<const int64_t*>(indices), gradient_count, embedding_dimension);
+  } else if (index_dtype == SPAR_CUDA_INT32) {
+    embedding_backward_kernel<<<blocks, threads_per_block>>>(
+        static_cast<double*>(output), static_cast<const double*>(gradient),
+        static_cast<const int32_t*>(indices), gradient_count, embedding_dimension);
+  } else {
+    embedding_backward_kernel<<<blocks, threads_per_block>>>(
+        static_cast<double*>(output), static_cast<const double*>(gradient),
+        static_cast<const int64_t*>(indices), gradient_count, embedding_dimension);
+  }
+  return finish_launch(previous, changed);
+}
+
+extern "C" SparCudaStatus spar_cuda_launch_rope(void* output, const void* input,
+                                                uint64_t pair_count, uint64_t sequence_length,
+                                                uint64_t feature_count, uint64_t start_position,
+                                                double theta, int dtype, int inverse, int device) {
+  if (!valid_dtype(dtype) || feature_count == 0 || feature_count % 2U != 0 ||
+      (inverse != 0 && inverse != 1) || !(theta > 0.0) || !isfinite(theta)) {
+    return invalid_argument();
+  }
+  if (pair_count == 0) {
+    return success();
+  }
+  if (sequence_length == 0 || output == nullptr || input == nullptr) {
+    return invalid_argument();
+  }
+  int previous = 0;
+  bool changed = false;
+  SparCudaStatus status = select_device(device, &previous, &changed);
+  if (status.code != 0) {
+    return status;
+  }
+  const unsigned int blocks = block_count(pair_count);
+  if (dtype == SPAR_CUDA_FLOAT32) {
+    rope_kernel<<<blocks, threads_per_block>>>(
+        static_cast<float*>(output), static_cast<const float*>(input), pair_count, sequence_length,
+        feature_count, start_position, theta, inverse != 0);
+  } else {
+    rope_kernel<<<blocks, threads_per_block>>>(
+        static_cast<double*>(output), static_cast<const double*>(input), pair_count,
+        sequence_length, feature_count, start_position, theta, inverse != 0);
+  }
+  return finish_launch(previous, changed);
+}
+
+extern "C" SparCudaStatus spar_cuda_launch_causal_mask(void* output, uint64_t sequence_length,
+                                                       int dtype, int device) {
+  if (!valid_dtype(dtype) || sequence_length == 0 ||
+      sequence_length > UINT64_MAX / sequence_length || output == nullptr) {
+    return invalid_argument();
+  }
+  const uint64_t count = sequence_length * sequence_length;
+  int previous = 0;
+  bool changed = false;
+  SparCudaStatus status = select_device(device, &previous, &changed);
+  if (status.code != 0) {
+    return status;
+  }
+  const unsigned int blocks = block_count(count);
+  if (dtype == SPAR_CUDA_FLOAT32) {
+    causal_mask_kernel<<<blocks, threads_per_block>>>(static_cast<float*>(output), count,
+                                                      sequence_length);
+  } else {
+    causal_mask_kernel<<<blocks, threads_per_block>>>(static_cast<double*>(output), count,
+                                                      sequence_length);
   }
   return finish_launch(previous, changed);
 }

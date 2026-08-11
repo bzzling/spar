@@ -1,6 +1,7 @@
 module spar.ops.matmul;
 
 import std;
+import spar.cuda_blas;
 import spar.dtype;
 import spar.shape;
 import spar.tensor;
@@ -21,7 +22,6 @@ struct MatmulPlan final {
 
 MatmulPlan plan_matmul(const Tensor& a, const Tensor& b) {
   detail::validate_same_device(a, b, "matmul");
-  detail::require_cpu(a, "matmul");
   if (a.rank() < 2 || b.rank() < 2) {
     throw invalid_argument{"matmul requires tensors with rank at least 2"};
   }
@@ -111,8 +111,12 @@ Tensor transpose_last_two(const Tensor& tensor) {
 
 Tensor matmul(const Tensor& a, const Tensor& b) {
   const MatmulPlan plan{plan_matmul(a, b)};
-  Tensor output{a.dtype() == DType::Float32 ? matmul_values<float>(a, b, plan)
-                                            : matmul_values<double>(a, b, plan)};
+  Tensor output{a.device().is_cuda()          ? detail::cuda_blas::matmul(
+                                                    a.detach().expand(plan.expanded_a_shape).contiguous(),
+                                                    b.detach().expand(plan.expanded_b_shape).contiguous(),
+                                                    plan.output_shape, plan.m, plan.k, plan.n)
+                : a.dtype() == DType::Float32 ? matmul_values<float>(a, b, plan)
+                                              : matmul_values<double>(a, b, plan)};
   if (a.requires_grad() || b.requires_grad()) {
     const bool grad_a{a.requires_grad()};
     const bool grad_b{b.requires_grad()};

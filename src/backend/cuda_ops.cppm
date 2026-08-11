@@ -36,6 +36,13 @@ struct SoftmaxForwardResult final {
                                           const Tensor& undefined_slices, std::size_t outer,
                                           std::size_t axis_extent, std::size_t inner,
                                           bool logarithmic);
+[[nodiscard]] Tensor embedding_forward(const Tensor& weight, const Tensor& indices,
+                                       Shape output_shape);
+[[nodiscard]] Tensor embedding_backward(const Tensor& gradient, const Tensor& indices,
+                                        Shape weight_shape);
+[[nodiscard]] Tensor rope(const Tensor& input, std::size_t start_position, double theta,
+                          bool inverse);
+[[nodiscard]] Tensor causal_mask(std::size_t sequence_length, DType dtype, Device device);
 [[nodiscard]] Tensor fill_from_device_scalar(Shape shape, const Tensor& scalar, double scale);
 
 } // namespace spar::detail::cuda_ops
@@ -56,6 +63,19 @@ int dtype_tag(DType dtype) {
     throw std::logic_error{"CUDA operation dtype validation invariant violated"};
   }
   throw std::logic_error{"CUDA operation dtype validation invariant violated"};
+}
+
+int index_dtype_tag(DType dtype) {
+  switch (dtype) {
+  case DType::Int32:
+    return SPAR_CUDA_INT32;
+  case DType::Int64:
+    return SPAR_CUDA_INT64;
+  case DType::Float32:
+  case DType::Float64:
+    throw std::logic_error{"CUDA index dtype validation invariant violated"};
+  }
+  throw std::logic_error{"CUDA index dtype validation invariant violated"};
 }
 
 int binary_tag(BinaryOperation operation) {
@@ -367,6 +387,115 @@ Tensor probability_backward(const Tensor& gradient, const Tensor& saved_output,
   static_cast<void>(axis_extent);
   static_cast<void>(inner);
   static_cast<void>(logarithmic);
+  unavailable();
+#endif
+}
+
+Tensor embedding_forward(const Tensor& weight, const Tensor& indices, Shape output_shape) {
+#if SPAR_ENABLE_CUDA
+  if (!weight.device().is_cuda() || weight.device() != indices.device() ||
+      !weight.is_contiguous() || !indices.is_contiguous() || weight.rank() != 2 ||
+      (indices.dtype() != DType::Int32 && indices.dtype() != DType::Int64)) {
+    throw std::logic_error{"Internal CUDA embedding forward received invalid tensors"};
+  }
+  Tensor output{std::move(output_shape), weight.dtype(), weight.device()};
+  if (indices.numel() == 0) {
+    return output;
+  }
+  Tensor invalid_index{zeros(Shape{}, DType::Int32, weight.device())};
+  check(spar_cuda_launch_embedding_forward(
+            CudaTensorAccess::mutable_data(output),
+            static_cast<std::int32_t*>(CudaTensorAccess::mutable_data(invalid_index)),
+            CudaTensorAccess::data(weight), CudaTensorAccess::data(indices),
+            checked_count(indices.numel()),
+            checked_count(static_cast<std::size_t>(weight.shape()[0])),
+            checked_count(static_cast<std::size_t>(weight.shape()[1])), dtype_tag(weight.dtype()),
+            index_dtype_tag(indices.dtype()), weight.device().index()),
+        "embedding_lookup", weight.device());
+  const Tensor host_status{invalid_index.to(Device::cpu())};
+  if (host_status.span<std::int32_t>()[0] != 0) {
+    throw std::out_of_range{"embedding_lookup index is outside the weight vocabulary"};
+  }
+  return output;
+#else
+  static_cast<void>(weight);
+  static_cast<void>(indices);
+  static_cast<void>(output_shape);
+  unavailable();
+#endif
+}
+
+Tensor embedding_backward(const Tensor& gradient, const Tensor& indices, Shape weight_shape) {
+#if SPAR_ENABLE_CUDA
+  if (!gradient.device().is_cuda() || gradient.device() != indices.device() ||
+      !gradient.is_contiguous() || !indices.is_contiguous() ||
+      (indices.dtype() != DType::Int32 && indices.dtype() != DType::Int64) ||
+      weight_shape.rank() != 2) {
+    throw std::logic_error{"Internal CUDA embedding backward received invalid tensors"};
+  }
+  Tensor output{zeros(weight_shape, gradient.dtype(), gradient.device())};
+  if (indices.numel() == 0) {
+    return output;
+  }
+  check(spar_cuda_launch_embedding_backward(
+            CudaTensorAccess::mutable_data(output), CudaTensorAccess::data(gradient),
+            CudaTensorAccess::data(indices), checked_count(indices.numel()),
+            checked_count(static_cast<std::size_t>(weight_shape[1])), dtype_tag(gradient.dtype()),
+            index_dtype_tag(indices.dtype()), gradient.device().index()),
+        "embedding backward", gradient.device());
+  return output;
+#else
+  static_cast<void>(gradient);
+  static_cast<void>(indices);
+  static_cast<void>(weight_shape);
+  unavailable();
+#endif
+}
+
+Tensor rope(const Tensor& input, std::size_t start_position, double theta, bool inverse) {
+#if SPAR_ENABLE_CUDA
+  if (!input.device().is_cuda() || !input.is_contiguous() || input.rank() < 2) {
+    throw std::logic_error{"Internal CUDA RoPE received an invalid Tensor"};
+  }
+  Tensor output{input.shape(), input.dtype(), input.device()};
+  if (input.numel() == 0) {
+    return output;
+  }
+  const std::size_t sequence_length{static_cast<std::size_t>(input.shape()[input.rank() - 2])};
+  const std::size_t feature_count{static_cast<std::size_t>(input.shape()[input.rank() - 1])};
+  check(spar_cuda_launch_rope(CudaTensorAccess::mutable_data(output), CudaTensorAccess::data(input),
+                              checked_count(input.numel() / 2), checked_count(sequence_length),
+                              checked_count(feature_count), checked_count(start_position), theta,
+                              dtype_tag(input.dtype()), inverse ? 1 : 0, input.device().index()),
+        inverse ? "RoPE backward" : "RoPE", input.device());
+  return output;
+#else
+  static_cast<void>(input);
+  static_cast<void>(start_position);
+  static_cast<void>(theta);
+  static_cast<void>(inverse);
+  unavailable();
+#endif
+}
+
+Tensor causal_mask(std::size_t sequence_length, DType dtype, Device device) {
+#if SPAR_ENABLE_CUDA
+  if (!device.is_cuda() || sequence_length == 0 ||
+      sequence_length >
+          static_cast<std::size_t>(std::numeric_limits<Shape::dimension_type>::max())) {
+    throw std::logic_error{"Internal CUDA causal mask received invalid geometry"};
+  }
+  const auto dimension{static_cast<Shape::dimension_type>(sequence_length)};
+  Tensor output{Shape{dimension, dimension}, dtype, device};
+  check(spar_cuda_launch_causal_mask(CudaTensorAccess::mutable_data(output),
+                                     checked_count(sequence_length), dtype_tag(dtype),
+                                     device.index()),
+        "causal attention mask", device);
+  return output;
+#else
+  static_cast<void>(sequence_length);
+  static_cast<void>(dtype);
+  static_cast<void>(device);
   unavailable();
 #endif
 }

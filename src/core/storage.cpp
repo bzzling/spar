@@ -59,4 +59,12 @@ size_t Storage::nbytes() const noexcept {
   return nbytes_;
 }
 
+void Storage::swap_payload(Storage& other) noexcept {
+  using std::swap;
+  swap(nbytes_, other.nbytes_);
+  swap(device_, other.device_);
+  swap(host_data_, other.host_data_);
+  swap(cuda_data_, other.cuda_data_);
+}
+
 } // namespace spar::detail

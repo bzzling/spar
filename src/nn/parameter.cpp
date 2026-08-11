@@ -24,7 +24,7 @@ bool Parameter::requires_grad() const noexcept {
 }
 
 bool Parameter::shares_identity_with(const Parameter& other) const noexcept {
-  return detail::shares_autograd_identity(tensor_, other.tensor_);
+  return spar::detail::shares_autograd_identity(tensor_, other.tensor_);
 }
 
 void Parameter::set_requires_grad(bool enabled) {
@@ -45,6 +45,22 @@ void Parameter::zero_grad() {
 
 Parameter Parameter::clone() const {
   return Parameter{tensor_};
+}
+
+void move_to(Parameter& parameter, Device target) {
+  Tensor& value{migration_detail::ParameterMigrationAccess::tensor(parameter)};
+  if (value.device() == target) {
+    return;
+  }
+  if (parameter.has_grad()) {
+    throw logic_error{"Parameter Device migration requires clearing its live gradient first"};
+  }
+  Tensor staged{value.detach().to(target)};
+  spar::detail::swap_storage_payloads(value, staged);
+}
+
+Tensor& migration_detail::ParameterMigrationAccess::tensor(Parameter& parameter) noexcept {
+  return parameter.tensor_;
 }
 
 } // namespace spar::nn

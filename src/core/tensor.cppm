@@ -16,6 +16,7 @@ struct AutogradMeta;
 struct CudaTensorAccess;
 template <typename T> T logical_value(const spar::Tensor& tensor, std::size_t logical_index);
 void copy_tensor_values(spar::Tensor& destination, const spar::Tensor& source);
+void swap_storage_payloads(spar::Tensor& original, spar::Tensor& staged) noexcept;
 } // namespace spar::detail
 
 export namespace spar {
@@ -116,6 +117,7 @@ private:
   template <typename T>
   friend T detail::logical_value(const Tensor& tensor, std::size_t logical_index);
   friend void detail::copy_tensor_values(Tensor& destination, const Tensor& source);
+  friend void detail::swap_storage_payloads(Tensor& original, Tensor& staged) noexcept;
   friend Tensor zeros(Shape shape, DType dtype, Device device);
 
   Tensor(std::shared_ptr<detail::Storage> storage, DType dtype, Shape shape,
@@ -199,6 +201,8 @@ template <typename T> T logical_value(const Tensor& tensor, std::size_t logical_
 void validate_same_device(const Tensor& left, const Tensor& right, std::string_view operation);
 void require_cpu(const Tensor& tensor, std::string_view operation);
 void copy_tensor_values(Tensor& destination, const Tensor& source);
+/// Commits a pre-staged placement change without replacing Tensor/Storage identities.
+void swap_storage_payloads(Tensor& original, Tensor& staged) noexcept;
 [[nodiscard]] Tensor reduce_gradient_to_shape(const Tensor& gradient, const Shape& original_shape);
 
 /// Internal operation-recording hook; graph node types remain private to spar.tensor.

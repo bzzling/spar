@@ -1,6 +1,7 @@
 module spar.nn.rope;
 
 import std;
+import spar.cuda_ops;
 import spar.dtype;
 import spar.shape;
 import spar.tensor;
@@ -11,7 +12,6 @@ namespace spar::nn {
 namespace {
 
 void validate_rope(const Tensor& input, size_t start_position, double theta) {
-  detail::require_cpu(input, "RoPE");
   if (input.rank() < 2) {
     throw invalid_argument{"apply_rope input must have rank at least 2"};
   }
@@ -69,13 +69,19 @@ Tensor rotate(const Tensor& input, size_t start_position, double theta, bool inv
 
 Tensor apply_rope(const Tensor& input, size_t start_position, double theta) {
   validate_rope(input, start_position, theta);
-  Tensor output{input.dtype() == DType::Float32
-                    ? rotate<float>(input, start_position, theta, false)
-                    : rotate<double>(input, start_position, theta, false)};
+  Tensor output{
+      input.device().is_cuda()
+          ? detail::cuda_ops::rope(input.detach().contiguous(), start_position, theta, false)
+      : input.dtype() == DType::Float32 ? rotate<float>(input, start_position, theta, false)
+                                        : rotate<double>(input, start_position, theta, false)};
   if (input.requires_grad()) {
     const DType dtype{input.dtype()};
     detail::record_operation(
         output, {input}, [start_position, theta, dtype](const Tensor& gradient) {
+          if (gradient.device().is_cuda()) {
+            return vector<Tensor>{detail::cuda_ops::rope(gradient.detach().contiguous(),
+                                                         start_position, theta, true)};
+          }
           if (dtype == DType::Float32) {
             return vector<Tensor>{rotate<float>(gradient, start_position, theta, true)};
           }
