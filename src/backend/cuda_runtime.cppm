@@ -1,12 +1,14 @@
 module;
 
 #if SPAR_ENABLE_CUDA
+#include "cuda_kernels.hpp"
 #include <cuda_runtime_api.h>
 #endif
 
 export module spar.cuda_runtime;
 
 import std;
+import spar.dtype;
 
 export namespace spar::detail::cuda {
 
@@ -21,6 +23,8 @@ void copy_device_to_host(void* destination, const void* source, std::int32_t sou
                          std::size_t bytes);
 void copy_device_to_device(void* destination, std::int32_t destination_device, const void* source,
                            std::int32_t source_device, std::size_t bytes);
+void add_in_place(void* destination, const void* source, std::size_t count, DType dtype,
+                  std::int32_t device);
 
 } // namespace spar::detail::cuda
 
@@ -39,6 +43,15 @@ namespace {
 void check(cudaError_t error, std::string_view operation, std::int32_t device) {
   if (error != cudaSuccess) {
     throw_cuda_error(operation, device, error);
+  }
+}
+
+void check_kernel(SparCudaStatus status, std::string_view operation, std::int32_t device) {
+  if (status.code != 0) {
+    const char* message{spar_cuda_error_string(status.cuda_error)};
+    throw std::runtime_error{std::string{operation} + " failed on cuda:" + std::to_string(device) +
+                             ": " + (message == nullptr ? "unknown CUDA error" : message) +
+                             " (code " + std::to_string(status.cuda_error) + ")"};
   }
 }
 
@@ -211,6 +224,39 @@ void copy_device_to_device(void* destination, std::int32_t destination_device, c
   static_cast<void>(source);
   static_cast<void>(source_device);
   static_cast<void>(bytes);
+  unavailable();
+#endif
+}
+
+void add_in_place(void* destination, const void* source, std::size_t count, DType dtype,
+                  std::int32_t device) {
+#if SPAR_ENABLE_CUDA
+  if constexpr (sizeof(std::size_t) > sizeof(std::uint64_t)) {
+    if (count > std::numeric_limits<std::uint64_t>::max()) {
+      throw std::overflow_error{"CUDA gradient element count exceeds uint64_t"};
+    }
+  }
+  int dtype_tag{0};
+  switch (dtype) {
+  case DType::Float32:
+    dtype_tag = SPAR_CUDA_FLOAT32;
+    break;
+  case DType::Float64:
+    dtype_tag = SPAR_CUDA_FLOAT64;
+    break;
+  case DType::Int32:
+  case DType::Int64:
+    throw std::logic_error{"CUDA gradient accumulation requires a floating dtype"};
+  }
+  check_kernel(spar_cuda_launch_add_in_place(destination, source, static_cast<std::uint64_t>(count),
+                                             dtype_tag, device),
+               "CUDA gradient accumulation", device);
+#else
+  static_cast<void>(destination);
+  static_cast<void>(source);
+  static_cast<void>(count);
+  static_cast<void>(dtype);
+  static_cast<void>(device);
   unavailable();
 #endif
 }

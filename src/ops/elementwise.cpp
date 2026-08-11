@@ -1,6 +1,7 @@
 module spar.ops.elementwise;
 
 import std;
+import spar.cuda_ops;
 import spar.dtype;
 import spar.ops.scalar;
 import spar.shape;
@@ -13,7 +14,6 @@ namespace {
 
 Shape validate_binary_inputs(const Tensor& a, const Tensor& b) {
   detail::validate_same_device(a, b, "Elementwise operation");
-  detail::require_cpu(a, "Elementwise operation");
   if (a.dtype() != b.dtype()) {
     throw invalid_argument{"Elementwise operations require identical dtypes"};
   }
@@ -21,6 +21,13 @@ Shape validate_binary_inputs(const Tensor& a, const Tensor& b) {
     throw invalid_argument{"Elementwise operations currently support floating-point dtypes only"};
   }
   return detail::broadcast_shape(a.shape(), b.shape());
+}
+
+Tensor binary_cuda(const Tensor& a, const Tensor& b, const Shape& output_shape,
+                   detail::cuda_ops::BinaryOperation operation) {
+  const Tensor contiguous_a{a.detach().expand(output_shape).contiguous()};
+  const Tensor contiguous_b{b.detach().expand(output_shape).contiguous()};
+  return detail::cuda_ops::binary(contiguous_a, contiguous_b, operation);
 }
 
 template <typename T, typename Operation>
@@ -42,7 +49,9 @@ Tensor binary_values(const Tensor& a, const Tensor& b, const Shape& output_shape
 
 Tensor add(const Tensor& a, const Tensor& b) {
   const Shape output_shape{validate_binary_inputs(a, b)};
-  Tensor output{a.dtype() == DType::Float32
+  Tensor output{a.device().is_cuda()
+                    ? binary_cuda(a, b, output_shape, detail::cuda_ops::BinaryOperation::Add)
+                : a.dtype() == DType::Float32
                     ? binary_values<float>(a, b, output_shape,
                                            [](float left, float right) { return left + right; })
                     : binary_values<double>(a, b, output_shape, [](double left, double right) {
@@ -77,7 +86,9 @@ Tensor add(const Tensor& a, const Tensor& b) {
 
 Tensor subtract(const Tensor& a, const Tensor& b) {
   const Shape output_shape{validate_binary_inputs(a, b)};
-  Tensor output{a.dtype() == DType::Float32
+  Tensor output{a.device().is_cuda()
+                    ? binary_cuda(a, b, output_shape, detail::cuda_ops::BinaryOperation::Subtract)
+                : a.dtype() == DType::Float32
                     ? binary_values<float>(a, b, output_shape,
                                            [](float left, float right) { return left - right; })
                     : binary_values<double>(a, b, output_shape, [](double left, double right) {
@@ -113,7 +124,9 @@ Tensor subtract(const Tensor& a, const Tensor& b) {
 
 Tensor multiply(const Tensor& a, const Tensor& b) {
   const Shape output_shape{validate_binary_inputs(a, b)};
-  Tensor output{a.dtype() == DType::Float32
+  Tensor output{a.device().is_cuda()
+                    ? binary_cuda(a, b, output_shape, detail::cuda_ops::BinaryOperation::Multiply)
+                : a.dtype() == DType::Float32
                     ? binary_values<float>(a, b, output_shape,
                                            [](float left, float right) { return left * right; })
                     : binary_values<double>(a, b, output_shape, [](double left, double right) {
@@ -159,7 +172,9 @@ Tensor multiply(const Tensor& a, const Tensor& b) {
 
 Tensor divide(const Tensor& a, const Tensor& b) {
   const Shape output_shape{validate_binary_inputs(a, b)};
-  Tensor output{a.dtype() == DType::Float32
+  Tensor output{a.device().is_cuda()
+                    ? binary_cuda(a, b, output_shape, detail::cuda_ops::BinaryOperation::Divide)
+                : a.dtype() == DType::Float32
                     ? binary_values<float>(a, b, output_shape,
                                            [](float left, float right) { return left / right; })
                     : binary_values<double>(a, b, output_shape, [](double left, double right) {

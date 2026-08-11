@@ -1,6 +1,7 @@
 module spar.ops.scalar;
 
 import std;
+import spar.cuda_ops;
 import spar.dtype;
 import spar.tensor;
 
@@ -10,7 +11,6 @@ namespace spar {
 namespace {
 
 void validate_scalar_input(const Tensor& input) {
-  detail::require_cpu(input, "Scalar arithmetic");
   if (input.dtype() != DType::Float32 && input.dtype() != DType::Float64) {
     throw invalid_argument{"Scalar operations currently support floating-point dtypes only"};
   }
@@ -32,7 +32,8 @@ Tensor apply_scalar(const Tensor& input, T scalar, Operation operation) {
 }
 
 template <typename Operation>
-Tensor dispatch_scalar(const Tensor& input, double value, Operation operation) {
+Tensor dispatch_scalar(const Tensor& input, double value,
+                       detail::cuda_ops::BinaryOperation cuda_operation, Operation operation) {
   validate_scalar_input(input);
   switch (input.dtype()) {
   case DType::Float32: {
@@ -40,9 +41,15 @@ Tensor dispatch_scalar(const Tensor& input, double value, Operation operation) {
     if (isfinite(value) && (value > float_limit || value < -float_limit)) {
       throw overflow_error{"Scalar value is outside the finite Float32 range"};
     }
+    if (input.device().is_cuda()) {
+      return detail::cuda_ops::scalar(input, value, cuda_operation);
+    }
     return apply_scalar<float>(input, static_cast<float>(value), operation);
   }
   case DType::Float64:
+    if (input.device().is_cuda()) {
+      return detail::cuda_ops::scalar(input, value, cuda_operation);
+    }
     return apply_scalar<double>(input, value, operation);
   case DType::Int32:
   case DType::Int64:
@@ -54,8 +61,8 @@ Tensor dispatch_scalar(const Tensor& input, double value, Operation operation) {
 } // namespace
 
 Tensor add_scalar(const Tensor& input, double value) {
-  Tensor output{
-      dispatch_scalar(input, value, [](auto element, auto scalar) { return element + scalar; })};
+  Tensor output{dispatch_scalar(input, value, detail::cuda_ops::BinaryOperation::Add,
+                                [](auto element, auto scalar) { return element + scalar; })};
   if (input.requires_grad()) {
     detail::record_operation(output, {input},
                              [](const Tensor& gradient) { return vector<Tensor>{gradient}; });
@@ -64,8 +71,8 @@ Tensor add_scalar(const Tensor& input, double value) {
 }
 
 Tensor subtract_scalar(const Tensor& input, double value) {
-  Tensor output{
-      dispatch_scalar(input, value, [](auto element, auto scalar) { return element - scalar; })};
+  Tensor output{dispatch_scalar(input, value, detail::cuda_ops::BinaryOperation::Subtract,
+                                [](auto element, auto scalar) { return element - scalar; })};
   if (input.requires_grad()) {
     detail::record_operation(output, {input},
                              [](const Tensor& gradient) { return vector<Tensor>{gradient}; });
@@ -74,8 +81,8 @@ Tensor subtract_scalar(const Tensor& input, double value) {
 }
 
 Tensor multiply_scalar(const Tensor& input, double value) {
-  Tensor output{
-      dispatch_scalar(input, value, [](auto element, auto scalar) { return element * scalar; })};
+  Tensor output{dispatch_scalar(input, value, detail::cuda_ops::BinaryOperation::Multiply,
+                                [](auto element, auto scalar) { return element * scalar; })};
   if (input.requires_grad()) {
     detail::record_operation(output, {input}, [value](const Tensor& gradient) {
       return vector<Tensor>{multiply_scalar(gradient, value)};
@@ -85,8 +92,8 @@ Tensor multiply_scalar(const Tensor& input, double value) {
 }
 
 Tensor divide_scalar(const Tensor& input, double value) {
-  Tensor output{
-      dispatch_scalar(input, value, [](auto element, auto scalar) { return element / scalar; })};
+  Tensor output{dispatch_scalar(input, value, detail::cuda_ops::BinaryOperation::Divide,
+                                [](auto element, auto scalar) { return element / scalar; })};
   if (input.requires_grad()) {
     detail::record_operation(output, {input}, [value](const Tensor& gradient) {
       return vector<Tensor>{divide_scalar(gradient, value)};

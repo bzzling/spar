@@ -1,6 +1,7 @@
 module spar.ops.reduction;
 
 import std;
+import spar.cuda_ops;
 import spar.dtype;
 import spar.ops.scalar;
 import spar.shape;
@@ -12,7 +13,6 @@ namespace spar {
 namespace {
 
 void validate_reduction_input(const Tensor& input) {
-  detail::require_cpu(input, "Reduction");
   if (input.dtype() != DType::Float32 && input.dtype() != DType::Float64) {
     throw invalid_argument{"Reductions currently support floating-point dtypes only"};
   }
@@ -168,12 +168,20 @@ Tensor restore_and_expand_gradient(const Tensor& gradient, const Shape& input_sh
 
 Tensor sum(const Tensor& input) {
   validate_reduction_input(input);
-  Tensor output{input.dtype() == DType::Float32 ? sum_values<float>(input)
-                                                : sum_values<double>(input)};
+  const Tensor contiguous_input{input.device().is_cuda() ? input.detach().contiguous() : input};
+  Tensor output{
+      input.device().is_cuda()
+          ? detail::cuda_ops::reduction(contiguous_input, detail::cuda_ops::ReductionOperation::Sum)
+      : input.dtype() == DType::Float32 ? sum_values<float>(input)
+                                        : sum_values<double>(input)};
   if (input.requires_grad()) {
     const Shape input_shape{input.shape()};
     const DType input_dtype{input.dtype()};
     detail::record_operation(output, {input}, [input_shape, input_dtype](const Tensor& gradient) {
+      if (gradient.device().is_cuda()) {
+        return vector<Tensor>{
+            detail::cuda_ops::fill_from_device_scalar(input_shape, gradient.detach(), 1.0)};
+      }
       Tensor contribution{input_shape, input_dtype, gradient.device()};
       if (input_dtype == DType::Float32) {
         contribution.fill<float>(gradient.span<float>()[0]);
@@ -188,6 +196,9 @@ Tensor sum(const Tensor& input) {
 
 Tensor sum(const Tensor& input, span<const size_t> axes, bool keepdim) {
   validate_reduction_input(input);
+  if (input.device().is_cuda()) {
+    throw runtime_error{"CUDA axis reduction is not available for sum"};
+  }
   vector<size_t> normalized_axes{validate_axes(input, axes)};
   const Shape output_shape{reduced_shape(input, normalized_axes, keepdim)};
   Tensor output{input.dtype() == DType::Float32
@@ -218,14 +229,22 @@ Tensor mean(const Tensor& input) {
   if (input.numel() == 0) {
     throw invalid_argument{"mean is undefined for an empty tensor"};
   }
-  Tensor output{input.dtype() == DType::Float32 ? mean_values<float>(input)
-                                                : mean_values<double>(input)};
+  const Tensor contiguous_input{input.device().is_cuda() ? input.detach().contiguous() : input};
+  Tensor output{input.device().is_cuda()
+                    ? detail::cuda_ops::reduction(contiguous_input,
+                                                  detail::cuda_ops::ReductionOperation::Mean)
+                : input.dtype() == DType::Float32 ? mean_values<float>(input)
+                                                  : mean_values<double>(input)};
   if (input.requires_grad()) {
     const Shape input_shape{input.shape()};
     const DType input_dtype{input.dtype()};
     const size_t input_numel{input.numel()};
     detail::record_operation(
         output, {input}, [input_shape, input_dtype, input_numel](const Tensor& gradient) {
+          if (gradient.device().is_cuda()) {
+            return vector<Tensor>{detail::cuda_ops::fill_from_device_scalar(
+                input_shape, gradient.detach(), 1.0 / static_cast<double>(input_numel))};
+          }
           Tensor contribution{input_shape, input_dtype, gradient.device()};
           if (input_dtype == DType::Float32) {
             contribution.fill<float>(gradient.span<float>()[0] / static_cast<float>(input_numel));
@@ -241,6 +260,9 @@ Tensor mean(const Tensor& input) {
 
 Tensor mean(const Tensor& input, span<const size_t> axes, bool keepdim) {
   validate_reduction_input(input);
+  if (input.device().is_cuda()) {
+    throw runtime_error{"CUDA axis reduction is not available for mean"};
+  }
   vector<size_t> normalized_axes{validate_axes(input, axes)};
   const size_t element_count{reduced_element_count(input, normalized_axes)};
   if (element_count == 0) {
@@ -283,8 +305,16 @@ Tensor reduce_max(const Tensor& input) {
   }
   switch (input.dtype()) {
   case DType::Float32:
+    if (input.device().is_cuda()) {
+      return detail::cuda_ops::reduction(input.detach().contiguous(),
+                                         detail::cuda_ops::ReductionOperation::Max);
+    }
     return max_values<float>(input);
   case DType::Float64:
+    if (input.device().is_cuda()) {
+      return detail::cuda_ops::reduction(input.detach().contiguous(),
+                                         detail::cuda_ops::ReductionOperation::Max);
+    }
     return max_values<double>(input);
   case DType::Int32:
   case DType::Int64:

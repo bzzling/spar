@@ -46,6 +46,7 @@ option(SPAR_BUILD_EXAMPLES "Build Spar examples" OFF)
 option(SPAR_ENABLE_CUDA "Enable Spar CUDA storage and transfer support" OFF)
 
 if(SPAR_ENABLE_CUDA)
+    enable_language(CUDA)
     find_package(CUDAToolkit REQUIRED)
 endif()
 
@@ -176,15 +177,24 @@ target_sources(spar
         BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/src"
         FILES
             src/backend/cuda_runtime.cppm
+            src/backend/cuda_ops.cppm
 )
 
+set(SPAR_CUDA_COMPILED 0)
 if(SPAR_ENABLE_CUDA)
-    set_property(SOURCE src/backend/cuda_runtime.cppm
-        PROPERTY COMPILE_DEFINITIONS SPAR_ENABLE_CUDA=1)
-else()
-    set_property(SOURCE src/backend/cuda_runtime.cppm
-        PROPERTY COMPILE_DEFINITIONS SPAR_ENABLE_CUDA=0)
+    set(SPAR_CUDA_COMPILED 1)
+    target_sources(spar PRIVATE src/backend/cuda_kernels.cu)
+    set_target_properties(spar PROPERTIES
+        CUDA_STANDARD 20
+        CUDA_STANDARD_REQUIRED ON
+        CUDA_EXTENSIONS OFF
+    )
 endif()
+
+set_property(SOURCE
+    src/backend/cuda_runtime.cppm
+    src/backend/cuda_ops.cppm
+    PROPERTY COMPILE_DEFINITIONS SPAR_ENABLE_CUDA=${SPAR_CUDA_COMPILED})
 
 if(SPAR_ENABLE_CUDA)
     target_link_libraries(spar PRIVATE CUDA::cudart)
@@ -192,11 +202,11 @@ endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(spar PRIVATE
-        -Wall
-        -Wextra
-        -Wpedantic
-        -Wconversion
-        -Wsign-conversion
+        $<$<COMPILE_LANGUAGE:CXX>:-Wall>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wconversion>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wsign-conversion>
     )
 elseif(MSVC)
     target_compile_options(spar PRIVATE /W4 /permissive-)

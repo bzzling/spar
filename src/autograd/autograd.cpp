@@ -1,6 +1,7 @@
 module spar.tensor;
 
 import std;
+import spar.cuda_runtime;
 import spar.device;
 import spar.dtype;
 import spar.shape;
@@ -104,11 +105,9 @@ void add_gradient_values(Tensor& destination, const Tensor& contribution) {
     throw logic_error{"Internal gradient accumulation requires contiguous tensors"};
   }
   if (destination.device().is_cuda()) {
-    Tensor host_destination{destination.to(Device::cpu())};
-    const Tensor host_contribution{contribution.to(Device::cpu())};
-    add_gradient_values(host_destination, host_contribution);
-    const Tensor updated{host_destination.to(destination.device())};
-    detail::copy_tensor_values(destination, updated);
+    detail::cuda::add_in_place(detail::CudaTensorAccess::mutable_data(destination),
+                               detail::CudaTensorAccess::data(contribution), destination.numel(),
+                               destination.dtype(), destination.device().index());
     return;
   }
 

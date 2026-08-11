@@ -1,6 +1,7 @@
 module spar.ops.unary;
 
 import std;
+import spar.cuda_ops;
 import spar.dtype;
 import spar.ops.elementwise;
 import spar.ops.scalar;
@@ -12,7 +13,6 @@ namespace spar {
 namespace {
 
 void validate_unary_input(const Tensor& input) {
-  detail::require_cpu(input, "Unary operation");
   if (input.dtype() != DType::Float32 && input.dtype() != DType::Float64) {
     throw invalid_argument{"Unary operations currently support floating-point dtypes only"};
   }
@@ -33,8 +33,13 @@ Tensor apply_unary(const Tensor& input, Operation operation) {
   return output;
 }
 
-template <typename Operation> Tensor dispatch_unary(const Tensor& input, Operation operation) {
+template <typename Operation>
+Tensor dispatch_unary(const Tensor& input, detail::cuda_ops::UnaryOperation cuda_operation,
+                      Operation operation) {
   validate_unary_input(input);
+  if (input.device().is_cuda()) {
+    return detail::cuda_ops::unary(input, cuda_operation);
+  }
   switch (input.dtype()) {
   case DType::Float32:
     return apply_unary<float>(input, operation);
@@ -58,7 +63,8 @@ template <typename T> T stable_sigmoid(T value) {
 } // namespace
 
 Tensor negate(const Tensor& input) {
-  Tensor output{dispatch_unary(input, [](auto value) { return -value; })};
+  Tensor output{dispatch_unary(input, detail::cuda_ops::UnaryOperation::Negate,
+                               [](auto value) { return -value; })};
   if (input.requires_grad()) {
     detail::record_operation(output, {input}, [](const Tensor& gradient) {
       return vector<Tensor>{multiply_scalar(gradient, -1.0)};
@@ -68,7 +74,8 @@ Tensor negate(const Tensor& input) {
 }
 
 Tensor square(const Tensor& input) {
-  Tensor output{dispatch_unary(input, [](auto value) { return value * value; })};
+  Tensor output{dispatch_unary(input, detail::cuda_ops::UnaryOperation::Square,
+                               [](auto value) { return value * value; })};
   if (input.requires_grad()) {
     const Tensor saved_input{input.detach().clone()};
     detail::record_operation(output, {input}, [saved_input](const Tensor& gradient) {
@@ -79,7 +86,8 @@ Tensor square(const Tensor& input) {
 }
 
 Tensor reciprocal(const Tensor& input) {
-  Tensor output{dispatch_unary(input, [](auto value) { return decltype(value){1} / value; })};
+  Tensor output{dispatch_unary(input, detail::cuda_ops::UnaryOperation::Reciprocal,
+                               [](auto value) { return decltype(value){1} / value; })};
   if (input.requires_grad()) {
     const Tensor saved_input{input.detach().clone()};
     detail::record_operation(output, {input}, [saved_input](const Tensor& gradient) {
@@ -91,7 +99,8 @@ Tensor reciprocal(const Tensor& input) {
 }
 
 Tensor exp(const Tensor& input) {
-  Tensor output{dispatch_unary(input, [](auto value) { return std::exp(value); })};
+  Tensor output{dispatch_unary(input, detail::cuda_ops::UnaryOperation::Exp,
+                               [](auto value) { return std::exp(value); })};
   if (input.requires_grad()) {
     const Tensor saved_output{output.detach().clone()};
     detail::record_operation(output, {input}, [saved_output](const Tensor& gradient) {
@@ -102,7 +111,8 @@ Tensor exp(const Tensor& input) {
 }
 
 Tensor log(const Tensor& input) {
-  Tensor output{dispatch_unary(input, [](auto value) { return std::log(value); })};
+  Tensor output{dispatch_unary(input, detail::cuda_ops::UnaryOperation::Log,
+                               [](auto value) { return std::log(value); })};
   if (input.requires_grad()) {
     const Tensor saved_input{input.detach().clone()};
     detail::record_operation(output, {input}, [saved_input](const Tensor& gradient) {
@@ -113,7 +123,8 @@ Tensor log(const Tensor& input) {
 }
 
 Tensor sqrt(const Tensor& input) {
-  Tensor output{dispatch_unary(input, [](auto value) { return std::sqrt(value); })};
+  Tensor output{dispatch_unary(input, detail::cuda_ops::UnaryOperation::Sqrt,
+                               [](auto value) { return std::sqrt(value); })};
   if (input.requires_grad()) {
     const Tensor saved_output{output.detach().clone()};
     detail::record_operation(output, {input}, [saved_output](const Tensor& gradient) {
@@ -124,7 +135,8 @@ Tensor sqrt(const Tensor& input) {
 }
 
 Tensor sigmoid(const Tensor& input) {
-  Tensor output{dispatch_unary(input, [](auto value) { return stable_sigmoid(value); })};
+  Tensor output{dispatch_unary(input, detail::cuda_ops::UnaryOperation::Sigmoid,
+                               [](auto value) { return stable_sigmoid(value); })};
   if (input.requires_grad()) {
     const Tensor saved_output{output.detach().clone()};
     detail::record_operation(output, {input}, [saved_output](const Tensor& gradient) {
@@ -136,7 +148,8 @@ Tensor sigmoid(const Tensor& input) {
 }
 
 Tensor silu(const Tensor& input) {
-  Tensor output{dispatch_unary(input, [](auto value) { return value * stable_sigmoid(value); })};
+  Tensor output{dispatch_unary(input, detail::cuda_ops::UnaryOperation::Silu,
+                               [](auto value) { return value * stable_sigmoid(value); })};
   if (input.requires_grad()) {
     const Tensor saved_input{input.detach().clone()};
     detail::record_operation(output, {input}, [saved_input](const Tensor& gradient) {

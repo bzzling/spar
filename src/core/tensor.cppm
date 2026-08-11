@@ -13,6 +13,7 @@ class Tensor;
 export namespace spar::detail {
 struct AutogradAccess;
 struct AutogradMeta;
+struct CudaTensorAccess;
 template <typename T> T logical_value(const spar::Tensor& tensor, std::size_t logical_index);
 void copy_tensor_values(spar::Tensor& destination, const spar::Tensor& source);
 } // namespace spar::detail
@@ -111,6 +112,7 @@ public:
 
 private:
   friend struct detail::AutogradAccess;
+  friend struct detail::CudaTensorAccess;
   template <typename T>
   friend T detail::logical_value(const Tensor& tensor, std::size_t logical_index);
   friend void detail::copy_tensor_values(Tensor& destination, const Tensor& source);
@@ -176,6 +178,11 @@ template <typename T>
 } // namespace spar
 
 export namespace spar::detail {
+
+struct CudaTensorAccess final {
+  [[nodiscard]] static void* mutable_data(Tensor& tensor);
+  [[nodiscard]] static const void* data(const Tensor& tensor);
+};
 
 template <typename T> T logical_value(const Tensor& tensor, std::size_t logical_index) {
   if (dtype_of<T>() != tensor.dtype_) {

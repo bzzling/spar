@@ -467,6 +467,27 @@ Tensor ones(Shape shape, DType dtype, Device device) {
 
 namespace spar::detail {
 
+void* CudaTensorAccess::mutable_data(Tensor& tensor) {
+  if (!tensor.device().is_cuda() || !tensor.is_contiguous()) {
+    throw logic_error{"Internal CUDA access requires a contiguous CUDA Tensor"};
+  }
+  if (tensor.nbytes_ == 0) {
+    return nullptr;
+  }
+  return static_cast<byte*>(tensor.storage_->cuda_data()) + tensor.checked_storage_byte_offset();
+}
+
+const void* CudaTensorAccess::data(const Tensor& tensor) {
+  if (!tensor.device().is_cuda() || !tensor.is_contiguous()) {
+    throw logic_error{"Internal CUDA access requires a contiguous CUDA Tensor"};
+  }
+  if (tensor.nbytes_ == 0) {
+    return nullptr;
+  }
+  return static_cast<const byte*>(tensor.storage_->cuda_data()) +
+         tensor.checked_storage_byte_offset();
+}
+
 void require_cpu(const Tensor& tensor, string_view operation) {
   if (!tensor.device().is_cpu()) {
     throw runtime_error{string{operation} + " CUDA implementation is not available"};
