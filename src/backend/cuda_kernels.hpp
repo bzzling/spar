@@ -49,6 +49,16 @@ struct SparCudaStatus spar_cuda_launch_unary(void* output, const void* input, ui
                                              int dtype, int operation, int device);
 struct SparCudaStatus spar_cuda_launch_reduction(void* output, const void* input, uint64_t count,
                                                  int dtype, int operation, int device);
+struct SparCudaStatus spar_cuda_launch_row_reduction(void* output, const void* input,
+                                                     uint64_t row_count, uint64_t reduction_count,
+                                                     int dtype, int operation, int device);
+struct SparCudaStatus spar_cuda_launch_probability_forward(void* output, int32_t* undefined_slices,
+                                                           const void* input, uint64_t outer,
+                                                           uint64_t axis_extent, uint64_t inner,
+                                                           int dtype, int logarithmic, int device);
+struct SparCudaStatus spar_cuda_launch_probability_backward(
+    void* output, const void* gradient, const void* saved_output, const int32_t* undefined_slices,
+    uint64_t outer, uint64_t axis_extent, uint64_t inner, int dtype, int logarithmic, int device);
 struct SparCudaStatus spar_cuda_launch_fill_from_scalar(void* output, const void* scalar,
                                                         uint64_t count, int dtype, double scale,
                                                         int device);

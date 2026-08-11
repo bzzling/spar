@@ -18,10 +18,24 @@ enum class BinaryOperation { Add, Subtract, Multiply, Divide };
 enum class UnaryOperation { Negate, Square, Reciprocal, Exp, Log, Sqrt, Sigmoid, Silu };
 enum class ReductionOperation { Sum, Mean, Max };
 
+struct SoftmaxForwardResult final {
+  Tensor output;
+  Tensor undefined_slices;
+};
+
 [[nodiscard]] Tensor binary(const Tensor& left, const Tensor& right, BinaryOperation operation);
 [[nodiscard]] Tensor scalar(const Tensor& input, double value, BinaryOperation operation);
 [[nodiscard]] Tensor unary(const Tensor& input, UnaryOperation operation);
 [[nodiscard]] Tensor reduction(const Tensor& input, ReductionOperation operation);
+[[nodiscard]] Tensor row_reduction(const Tensor& input, std::size_t row_count,
+                                   std::size_t reduction_count, ReductionOperation operation);
+[[nodiscard]] SoftmaxForwardResult probability_forward(const Tensor& input, std::size_t outer,
+                                                       std::size_t axis_extent, std::size_t inner,
+                                                       bool logarithmic);
+[[nodiscard]] Tensor probability_backward(const Tensor& gradient, const Tensor& saved_output,
+                                          const Tensor& undefined_slices, std::size_t outer,
+                                          std::size_t axis_extent, std::size_t inner,
+                                          bool logarithmic);
 [[nodiscard]] Tensor fill_from_device_scalar(Shape shape, const Tensor& scalar, double scale);
 
 } // namespace spar::detail::cuda_ops
@@ -249,6 +263,110 @@ Tensor reduction(const Tensor& input, ReductionOperation operation) {
 #else
   static_cast<void>(input);
   static_cast<void>(operation);
+  unavailable();
+#endif
+}
+
+Tensor row_reduction(const Tensor& input, std::size_t row_count, std::size_t reduction_count,
+                     ReductionOperation operation) {
+#if SPAR_ENABLE_CUDA
+  const bool product_matches{reduction_count == 0
+                                 ? input.numel() == 0
+                                 : row_count <= std::numeric_limits<std::size_t>::max() /
+                                                    reduction_count &&
+                                       input.numel() == row_count * reduction_count};
+  if (!input.device().is_cuda() || !input.is_contiguous() || operation == ReductionOperation::Max ||
+      !product_matches ||
+      row_count > static_cast<std::size_t>(std::numeric_limits<Shape::dimension_type>::max())) {
+    throw std::logic_error{"Internal CUDA row reduction received invalid geometry"};
+  }
+  Tensor output{Shape{static_cast<Shape::dimension_type>(row_count)}, input.dtype(),
+                input.device()};
+  check(spar_cuda_launch_row_reduction(CudaTensorAccess::mutable_data(output),
+                                       CudaTensorAccess::data(input), checked_count(row_count),
+                                       checked_count(reduction_count), dtype_tag(input.dtype()),
+                                       reduction_tag(operation), input.device().index()),
+        name_of(operation), input.device());
+  return output;
+#else
+  static_cast<void>(input);
+  static_cast<void>(row_count);
+  static_cast<void>(reduction_count);
+  static_cast<void>(operation);
+  unavailable();
+#endif
+}
+
+SoftmaxForwardResult probability_forward(const Tensor& input, std::size_t outer,
+                                         std::size_t axis_extent, std::size_t inner,
+                                         bool logarithmic) {
+#if SPAR_ENABLE_CUDA
+  const bool geometry_fits{outer != 0 && axis_extent != 0 && inner != 0 &&
+                           outer <= std::numeric_limits<std::size_t>::max() / axis_extent &&
+                           outer * axis_extent <= std::numeric_limits<std::size_t>::max() / inner &&
+                           input.numel() == outer * axis_extent * inner &&
+                           outer <= std::numeric_limits<std::size_t>::max() / inner};
+  const std::size_t slice_count{geometry_fits ? outer * inner : 0};
+  if (!input.device().is_cuda() || !input.is_contiguous() || !geometry_fits ||
+      slice_count > static_cast<std::size_t>(std::numeric_limits<Shape::dimension_type>::max())) {
+    throw std::logic_error{"Internal CUDA probability forward received invalid geometry"};
+  }
+  Tensor output{input.shape(), input.dtype(), input.device()};
+  Tensor undefined_slices{Shape{static_cast<Shape::dimension_type>(slice_count)}, DType::Int32,
+                          input.device()};
+  check(spar_cuda_launch_probability_forward(
+            CudaTensorAccess::mutable_data(output),
+            static_cast<std::int32_t*>(CudaTensorAccess::mutable_data(undefined_slices)),
+            CudaTensorAccess::data(input), checked_count(outer), checked_count(axis_extent),
+            checked_count(inner), dtype_tag(input.dtype()), logarithmic ? 1 : 0,
+            input.device().index()),
+        logarithmic ? "log_softmax" : "softmax", input.device());
+  return {std::move(output), std::move(undefined_slices)};
+#else
+  static_cast<void>(input);
+  static_cast<void>(outer);
+  static_cast<void>(axis_extent);
+  static_cast<void>(inner);
+  static_cast<void>(logarithmic);
+  unavailable();
+#endif
+}
+
+Tensor probability_backward(const Tensor& gradient, const Tensor& saved_output,
+                            const Tensor& undefined_slices, std::size_t outer,
+                            std::size_t axis_extent, std::size_t inner, bool logarithmic) {
+#if SPAR_ENABLE_CUDA
+  const bool geometry_fits{outer != 0 && axis_extent != 0 && inner != 0 &&
+                           outer <= std::numeric_limits<std::size_t>::max() / axis_extent &&
+                           outer * axis_extent <= std::numeric_limits<std::size_t>::max() / inner &&
+                           gradient.numel() == outer * axis_extent * inner &&
+                           outer <= std::numeric_limits<std::size_t>::max() / inner};
+  const std::size_t slice_count{geometry_fits ? outer * inner : 0};
+  if (!gradient.device().is_cuda() || gradient.device() != saved_output.device() ||
+      gradient.device() != undefined_slices.device() || !gradient.is_contiguous() ||
+      !saved_output.is_contiguous() || !undefined_slices.is_contiguous() ||
+      gradient.shape() != saved_output.shape() || gradient.dtype() != saved_output.dtype() ||
+      undefined_slices.dtype() != DType::Int32 || !geometry_fits ||
+      undefined_slices.numel() != slice_count) {
+    throw std::logic_error{"Internal CUDA probability backward received invalid tensors"};
+  }
+  Tensor output{gradient.shape(), gradient.dtype(), gradient.device()};
+  check(spar_cuda_launch_probability_backward(
+            CudaTensorAccess::mutable_data(output), CudaTensorAccess::data(gradient),
+            CudaTensorAccess::data(saved_output),
+            static_cast<const std::int32_t*>(CudaTensorAccess::data(undefined_slices)),
+            checked_count(outer), checked_count(axis_extent), checked_count(inner),
+            dtype_tag(output.dtype()), logarithmic ? 1 : 0, output.device().index()),
+        logarithmic ? "log_softmax backward" : "softmax backward", output.device());
+  return output;
+#else
+  static_cast<void>(gradient);
+  static_cast<void>(saved_output);
+  static_cast<void>(undefined_slices);
+  static_cast<void>(outer);
+  static_cast<void>(axis_extent);
+  static_cast<void>(inner);
+  static_cast<void>(logarithmic);
   unavailable();
 #endif
 }

@@ -1,6 +1,7 @@
 module spar.ops.softmax;
 
 import std;
+import spar.cuda_ops;
 import spar.dtype;
 import spar.tensor;
 
@@ -10,7 +11,6 @@ namespace spar {
 namespace {
 
 void validate_softmax_input(const Tensor& input) {
-  detail::require_cpu(input, "softmax");
   if (input.dtype() != DType::Float32 && input.dtype() != DType::Float64) {
     throw invalid_argument{"softmax currently supports floating-point dtypes only"};
   }
@@ -23,7 +23,6 @@ void validate_softmax_input(const Tensor& input) {
 }
 
 void validate_axis_softmax_input(const Tensor& input, size_t axis) {
-  detail::require_cpu(input, "softmax");
   if (input.dtype() != DType::Float32 && input.dtype() != DType::Float64) {
     throw invalid_argument{"softmax currently supports floating-point dtypes only"};
   }
@@ -243,6 +242,23 @@ template <typename T> Tensor softmax_values(const Tensor& input) {
 
 Tensor softmax(const Tensor& input) {
   validate_softmax_input(input);
+  if (input.device().is_cuda()) {
+    detail::cuda_ops::SoftmaxForwardResult result{
+        detail::cuda_ops::probability_forward(input.detach(), 1, input.numel(), 1, false)};
+    Tensor output{std::move(result.output)};
+    if (input.requires_grad()) {
+      const Tensor saved_output{output.detach().clone()};
+      const Tensor undefined_slices{result.undefined_slices.detach()};
+      const size_t axis_extent{input.numel()};
+      detail::record_operation(
+          output, {input}, [saved_output, undefined_slices, axis_extent](const Tensor& gradient) {
+            const Tensor contiguous_gradient{gradient.detach().contiguous()};
+            return vector<Tensor>{detail::cuda_ops::probability_backward(
+                contiguous_gradient, saved_output, undefined_slices, 1, axis_extent, 1, false)};
+          });
+    }
+    return output;
+  }
   Tensor output{input.dtype() == DType::Float32 ? softmax_values<float>(input)
                                                 : softmax_values<double>(input)};
   if (input.requires_grad()) {
@@ -266,6 +282,34 @@ Tensor softmax(const Tensor& input) {
 
 Tensor softmax(const Tensor& input, size_t axis) {
   validate_axis_softmax_input(input, axis);
+  if (input.device().is_cuda()) {
+    size_t outer{1};
+    for (size_t index{0}; index < axis; ++index) {
+      outer *= static_cast<size_t>(input.shape()[index]);
+    }
+    size_t inner{1};
+    for (size_t index{axis + 1}; index < input.rank(); ++index) {
+      inner *= static_cast<size_t>(input.shape()[index]);
+    }
+    const size_t axis_extent{static_cast<size_t>(input.shape()[axis])};
+    const Tensor contiguous_input{input.detach().contiguous()};
+    detail::cuda_ops::SoftmaxForwardResult result{
+        detail::cuda_ops::probability_forward(contiguous_input, outer, axis_extent, inner, false)};
+    Tensor output{std::move(result.output)};
+    if (input.requires_grad()) {
+      const Tensor saved_output{output.detach().clone()};
+      const Tensor undefined_slices{result.undefined_slices.detach()};
+      detail::record_operation(
+          output, {input},
+          [saved_output, undefined_slices, outer, axis_extent, inner](const Tensor& gradient) {
+            const Tensor contiguous_gradient{gradient.detach().contiguous()};
+            return vector<Tensor>{detail::cuda_ops::probability_backward(
+                contiguous_gradient, saved_output, undefined_slices, outer, axis_extent, inner,
+                false)};
+          });
+    }
+    return output;
+  }
   AxisSoftmaxResult result{input.dtype() == DType::Float32
                                ? axis_softmax_values<float>(input, axis)
                                : axis_softmax_values<double>(input, axis)};
@@ -400,7 +444,6 @@ Tensor log_softmax_gradient(const Tensor& gradient, const Tensor& saved_output,
 }
 
 Tensor log_softmax_impl(const Tensor& input, optional<size_t> axis) {
-  detail::require_cpu(input, "log_softmax");
   if (input.dtype() != DType::Float32 && input.dtype() != DType::Float64) {
     throw invalid_argument{"log_softmax supports floating-point dtypes only"};
   }
@@ -409,6 +452,36 @@ Tensor log_softmax_impl(const Tensor& input, optional<size_t> axis) {
   }
   if (axis && *axis >= input.rank()) {
     throw out_of_range{"log_softmax axis is out of range"};
+  }
+  if (input.device().is_cuda()) {
+    const size_t axis_extent{axis ? static_cast<size_t>(input.shape()[*axis]) : input.numel()};
+    size_t outer{1};
+    size_t inner{1};
+    if (axis) {
+      for (size_t index{0}; index < *axis; ++index) {
+        outer *= static_cast<size_t>(input.shape()[index]);
+      }
+      for (size_t index{*axis + 1}; index < input.rank(); ++index) {
+        inner *= static_cast<size_t>(input.shape()[index]);
+      }
+    }
+    const Tensor contiguous_input{input.detach().contiguous()};
+    detail::cuda_ops::SoftmaxForwardResult result{
+        detail::cuda_ops::probability_forward(contiguous_input, outer, axis_extent, inner, true)};
+    Tensor output{std::move(result.output)};
+    if (input.requires_grad()) {
+      const Tensor saved_output{output.detach().clone()};
+      const Tensor undefined_slices{result.undefined_slices.detach()};
+      detail::record_operation(
+          output, {input},
+          [saved_output, undefined_slices, outer, axis_extent, inner](const Tensor& gradient) {
+            const Tensor contiguous_gradient{gradient.detach().contiguous()};
+            return vector<Tensor>{detail::cuda_ops::probability_backward(
+                contiguous_gradient, saved_output, undefined_slices, outer, axis_extent, inner,
+                true)};
+          });
+    }
+    return output;
   }
   LogSoftmaxResult calculated{input.dtype() == DType::Float32
                                   ? log_softmax_values<float>(input, axis)

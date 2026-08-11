@@ -164,6 +164,26 @@ Tensor restore_and_expand_gradient(const Tensor& gradient, const Shape& input_sh
   return restored.expand(input_shape).contiguous();
 }
 
+Tensor cuda_axis_reduction(const Tensor& input, span<const size_t> axes, const Shape& output_shape,
+                           size_t reduction_count, detail::cuda_ops::ReductionOperation operation) {
+  vector<bool> reduced(input.rank(), false);
+  for (const size_t axis : axes) {
+    reduced[axis] = true;
+  }
+  vector<size_t> permutation;
+  permutation.reserve(input.rank());
+  for (size_t axis{0}; axis < input.rank(); ++axis) {
+    if (!reduced[axis]) {
+      permutation.push_back(axis);
+    }
+  }
+  permutation.insert(permutation.end(), axes.begin(), axes.end());
+  const Tensor normalized{input.detach().permute(permutation).contiguous()};
+  return detail::cuda_ops::row_reduction(normalized, output_shape.numel(), reduction_count,
+                                         operation)
+      .reshape(output_shape);
+}
+
 } // namespace
 
 Tensor sum(const Tensor& input) {
@@ -196,12 +216,13 @@ Tensor sum(const Tensor& input) {
 
 Tensor sum(const Tensor& input, span<const size_t> axes, bool keepdim) {
   validate_reduction_input(input);
-  if (input.device().is_cuda()) {
-    throw runtime_error{"CUDA axis reduction is not available for sum"};
-  }
   vector<size_t> normalized_axes{validate_axes(input, axes)};
   const Shape output_shape{reduced_shape(input, normalized_axes, keepdim)};
-  Tensor output{input.dtype() == DType::Float32
+  const size_t element_count{reduced_element_count(input, normalized_axes)};
+  Tensor output{input.device().is_cuda()
+                    ? cuda_axis_reduction(input, normalized_axes, output_shape, element_count,
+                                          detail::cuda_ops::ReductionOperation::Sum)
+                : input.dtype() == DType::Float32
                     ? axis_sum_values<float>(input, normalized_axes, keepdim, output_shape)
                     : axis_sum_values<double>(input, normalized_axes, keepdim, output_shape)};
   if (input.requires_grad()) {
@@ -260,19 +281,21 @@ Tensor mean(const Tensor& input) {
 
 Tensor mean(const Tensor& input, span<const size_t> axes, bool keepdim) {
   validate_reduction_input(input);
-  if (input.device().is_cuda()) {
-    throw runtime_error{"CUDA axis reduction is not available for mean"};
-  }
   vector<size_t> normalized_axes{validate_axes(input, axes)};
   const size_t element_count{reduced_element_count(input, normalized_axes)};
   if (element_count == 0) {
     throw invalid_argument{"mean is undefined for an empty reduction domain"};
   }
   const Shape output_shape{reduced_shape(input, normalized_axes, keepdim)};
-  Tensor summed{input.dtype() == DType::Float32
+  Tensor output{
+      input.device().is_cuda()
+          ? cuda_axis_reduction(input, normalized_axes, output_shape, element_count,
+                                detail::cuda_ops::ReductionOperation::Mean)
+          : divide_scalar(
+                input.dtype() == DType::Float32
                     ? axis_sum_values<float>(input, normalized_axes, keepdim, output_shape)
-                    : axis_sum_values<double>(input, normalized_axes, keepdim, output_shape)};
-  Tensor output{divide_scalar(summed, static_cast<double>(element_count))};
+                    : axis_sum_values<double>(input, normalized_axes, keepdim, output_shape),
+                static_cast<double>(element_count))};
   if (input.requires_grad()) {
     const Shape input_shape{input.shape()};
     detail::record_operation(

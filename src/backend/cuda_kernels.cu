@@ -219,6 +219,168 @@ __global__ void add_in_place_kernel(T* destination, const T* source, uint64_t co
   }
 }
 
+template <typename T>
+__global__ void row_reduction_kernel(T* output, const T* input, uint64_t row_count,
+                                     uint64_t reduction_count, bool take_mean) {
+  __shared__ T partial[threads_per_block];
+  for (uint64_t row = blockIdx.x; row < row_count; row += gridDim.x) {
+    T value = T{0};
+    const uint64_t base = row * reduction_count;
+    for (uint64_t column = threadIdx.x; column < reduction_count; column += blockDim.x) {
+      value += input[base + column];
+    }
+    partial[threadIdx.x] = value;
+    __syncthreads();
+    for (unsigned int width = blockDim.x / 2U; width != 0; width /= 2U) {
+      if (threadIdx.x < width) {
+        partial[threadIdx.x] += partial[threadIdx.x + width];
+      }
+      __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+      output[row] = take_mean ? partial[0] / static_cast<T>(reduction_count) : partial[0];
+    }
+    __syncthreads();
+  }
+}
+
+template <typename T>
+__global__ void probability_forward_kernel(T* output, int32_t* undefined_slices, const T* input,
+                                           uint64_t outer, uint64_t axis_extent, uint64_t inner,
+                                           bool logarithmic) {
+  __shared__ T partial_values[threads_per_block];
+  __shared__ unsigned int partial_nan[threads_per_block];
+  __shared__ uint64_t partial_positive_infinities[threads_per_block];
+  __shared__ T slice_maximum;
+  const uint64_t slice_count = outer * inner;
+  const T infinity = static_cast<T>(INFINITY);
+  const T nan = static_cast<T>(NAN);
+
+  for (uint64_t slice = blockIdx.x; slice < slice_count; slice += gridDim.x) {
+    const uint64_t outer_index = slice / inner;
+    const uint64_t inner_index = slice % inner;
+    T maximum = -infinity;
+    unsigned int contains_nan = 0;
+    uint64_t positive_infinities = 0;
+    for (uint64_t axis_index = threadIdx.x; axis_index < axis_extent; axis_index += blockDim.x) {
+      const uint64_t logical = (outer_index * axis_extent + axis_index) * inner + inner_index;
+      const T value = input[logical];
+      contains_nan |= isnan(value) ? 1U : 0U;
+      positive_infinities += value == infinity ? 1U : 0U;
+      if (value > maximum) {
+        maximum = value;
+      }
+    }
+    partial_values[threadIdx.x] = maximum;
+    partial_nan[threadIdx.x] = contains_nan;
+    partial_positive_infinities[threadIdx.x] = positive_infinities;
+    __syncthreads();
+    for (unsigned int width = blockDim.x / 2U; width != 0; width /= 2U) {
+      if (threadIdx.x < width) {
+        if (partial_values[threadIdx.x + width] > partial_values[threadIdx.x]) {
+          partial_values[threadIdx.x] = partial_values[threadIdx.x + width];
+        }
+        partial_nan[threadIdx.x] |= partial_nan[threadIdx.x + width];
+        partial_positive_infinities[threadIdx.x] +=
+            partial_positive_infinities[threadIdx.x + width];
+      }
+      __syncthreads();
+    }
+
+    if (threadIdx.x == 0) {
+      slice_maximum = partial_values[0];
+    }
+    __syncthreads();
+    const bool undefined = partial_nan[0] != 0U || partial_values[0] == -infinity ||
+                           partial_positive_infinities[0] != 0U;
+    if (threadIdx.x == 0) {
+      undefined_slices[slice] = undefined ? 1 : 0;
+    }
+    if (partial_nan[0] != 0U || partial_values[0] == -infinity) {
+      for (uint64_t axis_index = threadIdx.x; axis_index < axis_extent; axis_index += blockDim.x) {
+        const uint64_t logical = (outer_index * axis_extent + axis_index) * inner + inner_index;
+        output[logical] = nan;
+      }
+      __syncthreads();
+      continue;
+    }
+    if (partial_positive_infinities[0] != 0U) {
+      const T positive_value = logarithmic ? -log(static_cast<T>(partial_positive_infinities[0]))
+                                           : T{1} / static_cast<T>(partial_positive_infinities[0]);
+      const T other_value = logarithmic ? -infinity : T{0};
+      for (uint64_t axis_index = threadIdx.x; axis_index < axis_extent; axis_index += blockDim.x) {
+        const uint64_t logical = (outer_index * axis_extent + axis_index) * inner + inner_index;
+        output[logical] = input[logical] == infinity ? positive_value : other_value;
+      }
+      __syncthreads();
+      continue;
+    }
+
+    T exponential_sum = T{0};
+    for (uint64_t axis_index = threadIdx.x; axis_index < axis_extent; axis_index += blockDim.x) {
+      const uint64_t logical = (outer_index * axis_extent + axis_index) * inner + inner_index;
+      exponential_sum += exp(input[logical] - slice_maximum);
+    }
+    partial_values[threadIdx.x] = exponential_sum;
+    __syncthreads();
+    for (unsigned int width = blockDim.x / 2U; width != 0; width /= 2U) {
+      if (threadIdx.x < width) {
+        partial_values[threadIdx.x] += partial_values[threadIdx.x + width];
+      }
+      __syncthreads();
+    }
+    const T normalization = logarithmic ? log(partial_values[0]) : partial_values[0];
+    for (uint64_t axis_index = threadIdx.x; axis_index < axis_extent; axis_index += blockDim.x) {
+      const uint64_t logical = (outer_index * axis_extent + axis_index) * inner + inner_index;
+      output[logical] = logarithmic ? (input[logical] - slice_maximum) - normalization
+                                    : exp(input[logical] - slice_maximum) / normalization;
+    }
+    __syncthreads();
+  }
+}
+
+template <typename T>
+__global__ void probability_backward_kernel(T* output, const T* gradient, const T* saved_output,
+                                            const int32_t* undefined_slices, uint64_t outer,
+                                            uint64_t axis_extent, uint64_t inner,
+                                            bool logarithmic) {
+  __shared__ T partial[threads_per_block];
+  const uint64_t slice_count = outer * inner;
+  const T nan = static_cast<T>(NAN);
+  for (uint64_t slice = blockIdx.x; slice < slice_count; slice += gridDim.x) {
+    const uint64_t outer_index = slice / inner;
+    const uint64_t inner_index = slice % inner;
+    if (undefined_slices[slice] != 0) {
+      for (uint64_t axis_index = threadIdx.x; axis_index < axis_extent; axis_index += blockDim.x) {
+        const uint64_t logical = (outer_index * axis_extent + axis_index) * inner + inner_index;
+        output[logical] = nan;
+      }
+      __syncthreads();
+      continue;
+    }
+    T accumulated = T{0};
+    for (uint64_t axis_index = threadIdx.x; axis_index < axis_extent; axis_index += blockDim.x) {
+      const uint64_t logical = (outer_index * axis_extent + axis_index) * inner + inner_index;
+      accumulated += logarithmic ? gradient[logical] : gradient[logical] * saved_output[logical];
+    }
+    partial[threadIdx.x] = accumulated;
+    __syncthreads();
+    for (unsigned int width = blockDim.x / 2U; width != 0; width /= 2U) {
+      if (threadIdx.x < width) {
+        partial[threadIdx.x] += partial[threadIdx.x + width];
+      }
+      __syncthreads();
+    }
+    const T reduced = partial[0];
+    for (uint64_t axis_index = threadIdx.x; axis_index < axis_extent; axis_index += blockDim.x) {
+      const uint64_t logical = (outer_index * axis_extent + axis_index) * inner + inner_index;
+      output[logical] = logarithmic ? gradient[logical] - exp(saved_output[logical]) * reduced
+                                    : saved_output[logical] * (gradient[logical] - reduced);
+    }
+    __syncthreads();
+  }
+}
+
 bool valid_dtype(int dtype) {
   return dtype == SPAR_CUDA_FLOAT32 || dtype == SPAR_CUDA_FLOAT64;
 }
@@ -338,6 +500,102 @@ extern "C" SparCudaStatus spar_cuda_launch_reduction(void* output, const void* i
     sum_kernel<<<1, threads_per_block>>>(static_cast<double*>(output),
                                          static_cast<const double*>(input), count,
                                          operation == SPAR_CUDA_MEAN);
+  }
+  return finish_launch(previous, changed);
+}
+
+extern "C" SparCudaStatus spar_cuda_launch_row_reduction(void* output, const void* input,
+                                                         uint64_t row_count,
+                                                         uint64_t reduction_count, int dtype,
+                                                         int operation, int device) {
+  if (!valid_dtype(dtype) || (operation != SPAR_CUDA_SUM && operation != SPAR_CUDA_MEAN) ||
+      (row_count != 0 && output == nullptr) ||
+      (row_count != 0 && reduction_count != 0 && input == nullptr) ||
+      (operation == SPAR_CUDA_MEAN && reduction_count == 0)) {
+    return invalid_argument();
+  }
+  if (row_count == 0) {
+    return success();
+  }
+  int previous = 0;
+  bool changed = false;
+  SparCudaStatus status = select_device(device, &previous, &changed);
+  if (status.code != 0) {
+    return status;
+  }
+  const unsigned int blocks = block_count(row_count);
+  if (dtype == SPAR_CUDA_FLOAT32) {
+    row_reduction_kernel<<<blocks, threads_per_block>>>(
+        static_cast<float*>(output), static_cast<const float*>(input), row_count, reduction_count,
+        operation == SPAR_CUDA_MEAN);
+  } else {
+    row_reduction_kernel<<<blocks, threads_per_block>>>(
+        static_cast<double*>(output), static_cast<const double*>(input), row_count, reduction_count,
+        operation == SPAR_CUDA_MEAN);
+  }
+  return finish_launch(previous, changed);
+}
+
+extern "C" SparCudaStatus
+spar_cuda_launch_probability_forward(void* output, int32_t* undefined_slices, const void* input,
+                                     uint64_t outer, uint64_t axis_extent, uint64_t inner,
+                                     int dtype, int logarithmic, int device) {
+  if (inner == 0 || outer > UINT64_MAX / inner) {
+    return invalid_argument();
+  }
+  const uint64_t slice_count = outer * inner;
+  if (!valid_dtype(dtype) || axis_extent == 0 || (logarithmic != 0 && logarithmic != 1) ||
+      slice_count == 0 || output == nullptr || undefined_slices == nullptr || input == nullptr) {
+    return invalid_argument();
+  }
+  int previous = 0;
+  bool changed = false;
+  SparCudaStatus status = select_device(device, &previous, &changed);
+  if (status.code != 0) {
+    return status;
+  }
+  const unsigned int blocks = block_count(slice_count);
+  if (dtype == SPAR_CUDA_FLOAT32) {
+    probability_forward_kernel<<<blocks, threads_per_block>>>(
+        static_cast<float*>(output), undefined_slices, static_cast<const float*>(input), outer,
+        axis_extent, inner, logarithmic != 0);
+  } else {
+    probability_forward_kernel<<<blocks, threads_per_block>>>(
+        static_cast<double*>(output), undefined_slices, static_cast<const double*>(input), outer,
+        axis_extent, inner, logarithmic != 0);
+  }
+  return finish_launch(previous, changed);
+}
+
+extern "C" SparCudaStatus spar_cuda_launch_probability_backward(
+    void* output, const void* gradient, const void* saved_output, const int32_t* undefined_slices,
+    uint64_t outer, uint64_t axis_extent, uint64_t inner, int dtype, int logarithmic, int device) {
+  if (inner == 0 || outer > UINT64_MAX / inner) {
+    return invalid_argument();
+  }
+  const uint64_t slice_count = outer * inner;
+  if (!valid_dtype(dtype) || axis_extent == 0 || (logarithmic != 0 && logarithmic != 1) ||
+      slice_count == 0 || output == nullptr || gradient == nullptr || saved_output == nullptr ||
+      undefined_slices == nullptr) {
+    return invalid_argument();
+  }
+  int previous = 0;
+  bool changed = false;
+  SparCudaStatus status = select_device(device, &previous, &changed);
+  if (status.code != 0) {
+    return status;
+  }
+  const unsigned int blocks = block_count(slice_count);
+  if (dtype == SPAR_CUDA_FLOAT32) {
+    probability_backward_kernel<<<blocks, threads_per_block>>>(
+        static_cast<float*>(output), static_cast<const float*>(gradient),
+        static_cast<const float*>(saved_output), undefined_slices, outer, axis_extent, inner,
+        logarithmic != 0);
+  } else {
+    probability_backward_kernel<<<blocks, threads_per_block>>>(
+        static_cast<double*>(output), static_cast<const double*>(gradient),
+        static_cast<const double*>(saved_output), undefined_slices, outer, axis_extent, inner,
+        logarithmic != 0);
   }
   return finish_launch(previous, changed);
 }
