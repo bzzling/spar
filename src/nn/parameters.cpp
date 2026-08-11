@@ -155,28 +155,7 @@ void zero_grad(DecoderLM& model) {
 
 void move_to(DecoderLM& model, Device target) {
   vector<Parameter> unique{parameters(model)};
-  for (const Parameter& parameter : unique) {
-    if (parameter.tensor().device() != target && parameter.has_grad()) {
-      throw logic_error{"DecoderLM Device migration requires clearing all live gradients first"};
-    }
-  }
-
-  struct StagedMigration final {
-    Parameter parameter;
-    Tensor value;
-  };
-  vector<StagedMigration> staged;
-  staged.reserve(unique.size());
-  for (Parameter& parameter : unique) {
-    if (parameter.tensor().device() != target) {
-      staged.push_back(StagedMigration{parameter, parameter.tensor().detach().to(target)});
-    }
-  }
-
-  for (StagedMigration& migration : staged) {
-    Tensor& original{migration_detail::ParameterMigrationAccess::tensor(migration.parameter)};
-    spar::detail::swap_storage_payloads(original, migration.value);
-  }
+  move_to(span<Parameter>{unique}, target);
 }
 
 } // namespace spar::nn

@@ -48,19 +48,42 @@ Parameter Parameter::clone() const {
 }
 
 void move_to(Parameter& parameter, Device target) {
-  Tensor& value{migration_detail::ParameterMigrationAccess::tensor(parameter)};
-  if (value.device() == target) {
-    return;
-  }
-  if (parameter.has_grad()) {
-    throw logic_error{"Parameter Device migration requires clearing its live gradient first"};
-  }
-  Tensor staged{value.detach().to(target)};
-  spar::detail::swap_storage_payloads(value, staged);
+  move_to(span<Parameter>{&parameter, 1}, target);
 }
 
-Tensor& migration_detail::ParameterMigrationAccess::tensor(Parameter& parameter) noexcept {
-  return parameter.tensor_;
+void move_to(span<Parameter> parameters, Device target) {
+  vector<Parameter> unique;
+  unique.reserve(parameters.size());
+  for (Parameter& parameter : parameters) {
+    const bool duplicate{ranges::any_of(unique, [&parameter](const Parameter& existing) {
+      return existing.shares_identity_with(parameter);
+    })};
+    if (!duplicate) {
+      unique.push_back(parameter);
+    }
+  }
+
+  for (const Parameter& parameter : unique) {
+    if (parameter.tensor_.device() != target && parameter.has_grad()) {
+      throw logic_error{"Parameter Device migration requires clearing its live gradient first"};
+    }
+  }
+
+  struct StagedMigration final {
+    Parameter parameter;
+    Tensor value;
+  };
+  vector<StagedMigration> staged;
+  staged.reserve(unique.size());
+  for (Parameter& parameter : unique) {
+    if (parameter.tensor_.device() != target) {
+      staged.push_back(StagedMigration{parameter, parameter.tensor_.detach().to(target)});
+    }
+  }
+
+  for (StagedMigration& migration : staged) {
+    spar::detail::swap_storage_payloads(migration.parameter.tensor_, migration.value);
+  }
 }
 
 } // namespace spar::nn

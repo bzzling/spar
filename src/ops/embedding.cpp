@@ -89,6 +89,9 @@ Tensor embedding_gradient(const Tensor& gradient, const Tensor& saved_indices,
 Tensor embedding_lookup(const Tensor& weight, const Tensor& indices) {
   validate_embedding_inputs(weight, indices);
   const size_t vocabulary_size{static_cast<size_t>(weight.shape()[0])};
+  if (vocabulary_size == 0 && indices.numel() != 0) {
+    throw out_of_range{"embedding_lookup index is outside the weight vocabulary"};
+  }
   Tensor output{[&] {
     if (weight.device().is_cuda()) {
       return detail::cuda_ops::embedding_forward(weight.detach().contiguous(),

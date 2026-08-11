@@ -1,12 +1,9 @@
 export module spar.nn.parameter;
 
+import std;
 export import spar.tensor;
 
 export namespace spar::nn {
-
-namespace migration_detail {
-struct ParameterMigrationAccess;
-}
 
 /// A trainable floating-point leaf Tensor. Copies share value/gradient identity;
 /// clone() creates an independent leaf.
@@ -27,7 +24,8 @@ public:
   [[nodiscard]] Parameter clone() const;
 
 private:
-  friend struct migration_detail::ParameterMigrationAccess;
+  friend void move_to(Parameter& parameter, Device target);
+  friend void move_to(std::span<Parameter> parameters, Device target);
   Tensor tensor_;
 };
 
@@ -35,12 +33,8 @@ private:
 /// This is a graph-boundary operation and rejects migration when a live gradient exists.
 void move_to(Parameter& parameter, Device target);
 
+/// Transactionally migrates each unique Parameter while preserving aliases and ties.
+/// All allocations and copies complete before the no-throw commit phase begins.
+void move_to(std::span<Parameter> parameters, Device target);
+
 } // namespace spar::nn
-
-export namespace spar::nn::migration_detail {
-
-struct ParameterMigrationAccess final {
-  [[nodiscard]] static Tensor& tensor(Parameter& parameter) noexcept;
-};
-
-} // namespace spar::nn::migration_detail

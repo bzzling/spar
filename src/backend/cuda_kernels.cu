@@ -381,6 +381,19 @@ __global__ void probability_backward_kernel(T* output, const T* gradient, const 
   }
 }
 
+template <typename Index>
+__global__ void validate_embedding_indices_kernel(int32_t* invalid_index, const Index* indices,
+                                                  uint64_t index_count, uint64_t vocabulary_size) {
+  const uint64_t start = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const uint64_t stride = static_cast<uint64_t>(blockDim.x) * gridDim.x;
+  for (uint64_t position = start; position < index_count; position += stride) {
+    const Index token = indices[position];
+    if (token < 0 || static_cast<uint64_t>(token) >= vocabulary_size) {
+      atomicExch(invalid_index, 1);
+    }
+  }
+}
+
 template <typename T, typename Index>
 __global__ void embedding_forward_kernel(T* output, int32_t* invalid_index, const T* weight,
                                          const Index* indices, uint64_t output_count,
@@ -669,6 +682,32 @@ extern "C" SparCudaStatus spar_cuda_launch_probability_backward(
         static_cast<double*>(output), static_cast<const double*>(gradient),
         static_cast<const double*>(saved_output), undefined_slices, outer, axis_extent, inner,
         logarithmic != 0);
+  }
+  return finish_launch(previous, changed);
+}
+
+extern "C" SparCudaStatus spar_cuda_launch_validate_embedding_indices(int32_t* invalid_index,
+                                                                      const void* indices,
+                                                                      uint64_t index_count,
+                                                                      uint64_t vocabulary_size,
+                                                                      int index_dtype, int device) {
+  if (!valid_index_dtype(index_dtype) || index_count == 0 || invalid_index == nullptr ||
+      indices == nullptr) {
+    return invalid_argument();
+  }
+  int previous = 0;
+  bool changed = false;
+  SparCudaStatus status = select_device(device, &previous, &changed);
+  if (status.code != 0) {
+    return status;
+  }
+  const unsigned int blocks = block_count(index_count);
+  if (index_dtype == SPAR_CUDA_INT32) {
+    validate_embedding_indices_kernel<<<blocks, threads_per_block>>>(
+        invalid_index, static_cast<const int32_t*>(indices), index_count, vocabulary_size);
+  } else {
+    validate_embedding_indices_kernel<<<blocks, threads_per_block>>>(
+        invalid_index, static_cast<const int64_t*>(indices), index_count, vocabulary_size);
   }
   return finish_launch(previous, changed);
 }

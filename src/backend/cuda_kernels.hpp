@@ -61,6 +61,11 @@ struct SparCudaStatus spar_cuda_launch_probability_forward(void* output, int32_t
 struct SparCudaStatus spar_cuda_launch_probability_backward(
     void* output, const void* gradient, const void* saved_output, const int32_t* undefined_slices,
     uint64_t outer, uint64_t axis_extent, uint64_t inner, int dtype, int logarithmic, int device);
+struct SparCudaStatus spar_cuda_launch_validate_embedding_indices(int32_t* invalid_index,
+                                                                  const void* indices,
+                                                                  uint64_t index_count,
+                                                                  uint64_t vocabulary_size,
+                                                                  int index_dtype, int device);
 struct SparCudaStatus
 spar_cuda_launch_embedding_forward(void* output, int32_t* invalid_index, const void* weight,
                                    const void* indices, uint64_t index_count,

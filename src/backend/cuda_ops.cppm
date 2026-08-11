@@ -403,15 +403,25 @@ Tensor embedding_forward(const Tensor& weight, const Tensor& indices, Shape outp
     return output;
   }
   Tensor invalid_index{zeros(Shape{}, DType::Int32, weight.device())};
-  check(spar_cuda_launch_embedding_forward(
-            CudaTensorAccess::mutable_data(output),
-            static_cast<std::int32_t*>(CudaTensorAccess::mutable_data(invalid_index)),
-            CudaTensorAccess::data(weight), CudaTensorAccess::data(indices),
-            checked_count(indices.numel()),
-            checked_count(static_cast<std::size_t>(weight.shape()[0])),
-            checked_count(static_cast<std::size_t>(weight.shape()[1])), dtype_tag(weight.dtype()),
-            index_dtype_tag(indices.dtype()), weight.device().index()),
-        "embedding_lookup", weight.device());
+  const std::size_t vocabulary_size{static_cast<std::size_t>(weight.shape()[0])};
+  const std::size_t embedding_dimension{static_cast<std::size_t>(weight.shape()[1])};
+  if (embedding_dimension == 0) {
+    check(spar_cuda_launch_validate_embedding_indices(
+              static_cast<std::int32_t*>(CudaTensorAccess::mutable_data(invalid_index)),
+              CudaTensorAccess::data(indices), checked_count(indices.numel()),
+              checked_count(vocabulary_size), index_dtype_tag(indices.dtype()),
+              weight.device().index()),
+          "embedding_lookup index validation", weight.device());
+  } else {
+    check(spar_cuda_launch_embedding_forward(
+              CudaTensorAccess::mutable_data(output),
+              static_cast<std::int32_t*>(CudaTensorAccess::mutable_data(invalid_index)),
+              CudaTensorAccess::data(weight), CudaTensorAccess::data(indices),
+              checked_count(indices.numel()), checked_count(vocabulary_size),
+              checked_count(embedding_dimension), dtype_tag(weight.dtype()),
+              index_dtype_tag(indices.dtype()), weight.device().index()),
+          "embedding_lookup", weight.device());
+  }
   const Tensor host_status{invalid_index.to(Device::cpu())};
   if (host_status.span<std::int32_t>()[0] != 0) {
     throw std::out_of_range{"embedding_lookup index is outside the weight vocabulary"};
@@ -434,7 +444,7 @@ Tensor embedding_backward(const Tensor& gradient, const Tensor& indices, Shape w
     throw std::logic_error{"Internal CUDA embedding backward received invalid tensors"};
   }
   Tensor output{zeros(weight_shape, gradient.dtype(), gradient.device())};
-  if (indices.numel() == 0) {
+  if (output.numel() == 0) {
     return output;
   }
   check(spar_cuda_launch_embedding_backward(
