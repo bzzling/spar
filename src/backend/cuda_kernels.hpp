@@ -87,6 +87,45 @@ struct SparCudaStatus spar_cuda_launch_fill_from_scalar(void* output, const void
                                                         int device);
 struct SparCudaStatus spar_cuda_launch_add_in_place(void* destination, const void* source,
                                                     uint64_t count, int dtype, int device);
+struct SparCudaStatus spar_cuda_launch_strided_copy(void* destination, const void* source,
+                                                    uint64_t rank, const uint64_t* extents,
+                                                    const uint64_t* strides,
+                                                    uint64_t storage_offset, uint64_t count,
+                                                    uint64_t element_size, int device);
+struct SparCudaStatus spar_cuda_launch_broadcast_reduce(
+    void* destination, const void* gradient, uint64_t gradient_rank,
+    const uint64_t* gradient_extents, uint64_t original_rank, const uint64_t* original_extents,
+    const uint64_t* original_strides, uint64_t count, int dtype, int device);
+struct SparCudaNormSummary {
+  double scale;
+  double scaled_sum_squares;
+  int has_infinity;
+  int has_nan;
+};
+struct SparCudaStatus spar_cuda_validate_targets(int32_t* invalid_target, const void* targets,
+                                                 uint64_t count, uint64_t classes, int target_dtype,
+                                                 int device);
+struct SparCudaStatus spar_cuda_launch_nll_forward(void* output, const void* log_probabilities,
+                                                   const void* targets, uint64_t output_count,
+                                                   uint64_t classes, uint64_t sequence_length,
+                                                   int dtype, int target_dtype, int language_model,
+                                                   int device);
+struct SparCudaStatus spar_cuda_launch_nll_backward(void* output, const void* gradient,
+                                                    const void* targets, uint64_t output_count,
+                                                    uint64_t classes, uint64_t sequence_length,
+                                                    int dtype, int target_dtype, int language_model,
+                                                    int device);
+struct SparCudaStatus spar_cuda_gradient_norm_summary(struct SparCudaNormSummary* host_summary,
+                                                      const void* gradient, uint64_t count,
+                                                      int dtype, int device);
+struct SparCudaStatus spar_cuda_launch_scale_in_place(void* values, uint64_t count, int dtype,
+                                                      double factor, int device);
+struct SparCudaStatus spar_cuda_launch_adamw(void* parameter, const void* gradient,
+                                             void* first_moment, void* second_moment,
+                                             uint64_t count, int dtype, double learning_rate,
+                                             double beta1, double beta2, double epsilon,
+                                             double weight_decay, double first_correction,
+                                             double second_correction, int device);
 const char* spar_cuda_error_string(int cuda_error);
 
 #ifdef __cplusplus

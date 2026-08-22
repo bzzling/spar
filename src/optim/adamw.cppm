@@ -24,6 +24,8 @@ public:
 
   void step();
   void zero_grad();
+  /// Transactionally stages optimizer moments and moves all tracked Parameters at a graph boundary.
+  void move_to(Device target);
 
   [[nodiscard]] std::size_t parameter_count() const noexcept;
   [[nodiscard]] double learning_rate() const noexcept;

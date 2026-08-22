@@ -1,6 +1,7 @@
 module spar.training.gradients;
 
 import std;
+import spar.cuda_ops;
 import spar.dtype;
 import spar.nn.parameter;
 import spar.tensor;
@@ -53,6 +54,28 @@ struct StableSumSquares final {
     }
   }
 
+  void combine(double other_scale, double other_sum_squares, bool other_infinity,
+               bool other_nan) noexcept {
+    has_nan = has_nan || other_nan;
+    has_infinity = has_infinity || other_infinity;
+    if (other_scale == 0.0) {
+      return;
+    }
+    if (scale == 0.0) {
+      scale = other_scale;
+      scaled_sum_squares = other_sum_squares;
+      return;
+    }
+    if (scale < other_scale) {
+      const double ratio{scale / other_scale};
+      scaled_sum_squares = other_sum_squares + scaled_sum_squares * ratio * ratio;
+      scale = other_scale;
+    } else {
+      const double ratio{other_scale / scale};
+      scaled_sum_squares += other_sum_squares * ratio * ratio;
+    }
+  }
+
   [[nodiscard]] double norm() const noexcept {
     if (has_nan) {
       return numeric_limits<double>::quiet_NaN();
@@ -86,7 +109,18 @@ double global_grad_norm(span<nn::Parameter> parameters) {
     if (gradient.device() != parameter->tensor().device()) {
       throw logic_error{"Active Parameter gradient Device mismatch"};
     }
-    detail::require_cpu(gradient, "global_grad_norm");
+    if (gradient.dtype() != DType::Float32 && gradient.dtype() != DType::Float64) {
+      throw logic_error{"Active Parameter gradient must be floating point"};
+    }
+    if (gradient.device().is_cuda()) {
+      if (!gradient.is_contiguous()) {
+        throw logic_error{"Active CUDA Parameter gradient must be contiguous"};
+      }
+      const auto summary{detail::cuda_ops::gradient_norm_summary(gradient)};
+      accumulator.combine(summary.scale, summary.scaled_sum_squares, summary.has_infinity,
+                          summary.has_nan);
+      continue;
+    }
     switch (gradient.dtype()) {
     case DType::Float32:
       add_gradient_to_norm<float>(gradient, accumulator);
@@ -112,10 +146,19 @@ void scale_gradients(span<nn::Parameter> parameters, double factor) {
     if (gradient.device() != parameter->tensor().device()) {
       throw logic_error{"Active Parameter gradient Device mismatch"};
     }
-    detail::require_cpu(gradient, "scale_gradients");
+    if (gradient.dtype() != DType::Float32 && gradient.dtype() != DType::Float64) {
+      throw logic_error{"Active Parameter gradient must be floating point"};
+    }
+    if (gradient.device().is_cuda() && !gradient.is_contiguous()) {
+      throw logic_error{"Active CUDA Parameter gradient must be contiguous"};
+    }
   }
   for (nn::Parameter* parameter : active) {
     Tensor gradient{parameter->grad()};
+    if (gradient.device().is_cuda()) {
+      detail::cuda_ops::scale_in_place(gradient, factor);
+      continue;
+    }
     switch (gradient.dtype()) {
     case DType::Float32:
       scale_gradient<float>(gradient, factor);

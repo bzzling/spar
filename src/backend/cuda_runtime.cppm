@@ -25,6 +25,14 @@ void copy_device_to_device(void* destination, std::int32_t destination_device, c
                            std::int32_t source_device, std::size_t bytes);
 void add_in_place(void* destination, const void* source, std::size_t count, DType dtype,
                   std::int32_t device);
+void strided_copy(void* destination, const void* source, std::span<const std::uint64_t> extents,
+                  std::span<const std::uint64_t> strides, std::uint64_t storage_offset,
+                  std::size_t count, std::size_t element_size, std::int32_t device);
+void broadcast_reduce(void* destination, const void* gradient,
+                      std::span<const std::uint64_t> gradient_extents,
+                      std::span<const std::uint64_t> original_extents,
+                      std::span<const std::uint64_t> original_strides, std::size_t count,
+                      DType dtype, std::int32_t device);
 
 } // namespace spar::detail::cuda
 
@@ -254,6 +262,81 @@ void add_in_place(void* destination, const void* source, std::size_t count, DTyp
 #else
   static_cast<void>(destination);
   static_cast<void>(source);
+  static_cast<void>(count);
+  static_cast<void>(dtype);
+  static_cast<void>(device);
+  unavailable();
+#endif
+}
+
+void strided_copy(void* destination, const void* source, std::span<const std::uint64_t> extents,
+                  std::span<const std::uint64_t> strides, std::uint64_t storage_offset,
+                  std::size_t count, std::size_t element_size, std::int32_t device) {
+#if SPAR_ENABLE_CUDA
+  if (extents.size() != strides.size()) {
+    throw std::invalid_argument{"CUDA strided copy metadata ranks differ"};
+  }
+  if (extents.size() > std::numeric_limits<std::uint64_t>::max() ||
+      count > std::numeric_limits<std::uint64_t>::max()) {
+    throw std::overflow_error{"CUDA strided copy metadata exceeds uint64_t"};
+  }
+  check_kernel(spar_cuda_launch_strided_copy(
+                   destination, source, static_cast<std::uint64_t>(extents.size()), extents.data(),
+                   strides.data(), storage_offset, static_cast<std::uint64_t>(count),
+                   static_cast<std::uint64_t>(element_size), device),
+               "CUDA strided copy", device);
+#else
+  static_cast<void>(destination);
+  static_cast<void>(source);
+  static_cast<void>(extents);
+  static_cast<void>(strides);
+  static_cast<void>(storage_offset);
+  static_cast<void>(count);
+  static_cast<void>(element_size);
+  static_cast<void>(device);
+  unavailable();
+#endif
+}
+
+void broadcast_reduce(void* destination, const void* gradient,
+                      std::span<const std::uint64_t> gradient_extents,
+                      std::span<const std::uint64_t> original_extents,
+                      std::span<const std::uint64_t> original_strides, std::size_t count,
+                      DType dtype, std::int32_t device) {
+#if SPAR_ENABLE_CUDA
+  if (original_extents.size() != original_strides.size() ||
+      original_extents.size() > gradient_extents.size()) {
+    throw std::invalid_argument{"CUDA broadcast reduction metadata is inconsistent"};
+  }
+  if (gradient_extents.size() > std::numeric_limits<std::uint64_t>::max() ||
+      original_extents.size() > std::numeric_limits<std::uint64_t>::max() ||
+      count > std::numeric_limits<std::uint64_t>::max()) {
+    throw std::overflow_error{"CUDA broadcast reduction metadata exceeds uint64_t"};
+  }
+  int dtype_tag{0};
+  switch (dtype) {
+  case DType::Float32:
+    dtype_tag = SPAR_CUDA_FLOAT32;
+    break;
+  case DType::Float64:
+    dtype_tag = SPAR_CUDA_FLOAT64;
+    break;
+  case DType::Int32:
+  case DType::Int64:
+    throw std::logic_error{"CUDA broadcast-gradient reduction requires a floating dtype"};
+  }
+  check_kernel(spar_cuda_launch_broadcast_reduce(
+                   destination, gradient, static_cast<std::uint64_t>(gradient_extents.size()),
+                   gradient_extents.data(), static_cast<std::uint64_t>(original_extents.size()),
+                   original_extents.data(), original_strides.data(),
+                   static_cast<std::uint64_t>(count), dtype_tag, device),
+               "CUDA broadcast-gradient reduction", device);
+#else
+  static_cast<void>(destination);
+  static_cast<void>(gradient);
+  static_cast<void>(gradient_extents);
+  static_cast<void>(original_extents);
+  static_cast<void>(original_strides);
   static_cast<void>(count);
   static_cast<void>(dtype);
   static_cast<void>(device);

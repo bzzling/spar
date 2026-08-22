@@ -10,6 +10,18 @@ import spar.storage;
 using namespace std;
 
 namespace spar {
+namespace {
+
+uint64_t checked_cuda_index(size_t value, string_view description) {
+  if constexpr (sizeof(size_t) > sizeof(uint64_t)) {
+    if (value > numeric_limits<uint64_t>::max()) {
+      throw overflow_error{string{description} + " exceeds CUDA's 64-bit index range"};
+    }
+  }
+  return static_cast<uint64_t>(value);
+}
+
+} // namespace
 
 Tensor::Tensor(Shape shape, DType dtype, Device device)
     : storage_{}, dtype_{dtype}, shape_{std::move(shape)}, strides_{shape_.contiguous_strides()},
@@ -161,12 +173,17 @@ Tensor Tensor::materialize_values(Device target) const {
       return target.is_cpu() ? staging : staging.materialize_values(target);
     }
 
-    auto host_storage{make_shared<detail::Storage>(storage_->nbytes(), Device::cpu())};
-    detail::cuda::copy_device_to_host(host_storage->host_data(), storage_->cuda_data(),
-                                      device().index(), storage_->nbytes());
-    Tensor host_view{std::move(host_storage), dtype_, shape_, strides_, storage_offset_};
-    Tensor staging{host_view.materialize_cpu_logical()};
-    return target.is_cpu() ? staging : staging.materialize_values(target);
+    vector<uint64_t> extents(rank());
+    vector<uint64_t> cuda_strides(rank());
+    for (size_t axis{0}; axis < rank(); ++axis) {
+      extents[axis] = static_cast<uint64_t>(shape_[axis]);
+      cuda_strides[axis] = checked_cuda_index(strides_[axis], "Tensor stride");
+    }
+    Tensor staging{shape_, dtype_, device()};
+    detail::cuda::strided_copy(staging.storage_->cuda_data(), storage_->cuda_data(), extents,
+                               cuda_strides, checked_cuda_index(storage_offset_, "Storage offset"),
+                               numel(), size_of(dtype_), device().index());
+    return target == device() ? staging : staging.materialize_values(target);
   }
 
   Tensor output{shape_, dtype_, target};
@@ -585,8 +602,24 @@ Tensor reduce_gradient_to_shape(const Tensor& gradient, const Shape& original_sh
     throw logic_error{"Gradient shape cannot be reduced to the requested broadcast parent shape"};
   }
   if (gradient.device().is_cuda()) {
-    const Tensor host_gradient{gradient.to(Device::cpu())};
-    return reduce_gradient_to_shape(host_gradient, original_shape).to(gradient.device());
+    const Tensor contiguous_gradient{gradient.detach().contiguous()};
+    Tensor result{zeros(original_shape, gradient.dtype(), gradient.device())};
+    vector<uint64_t> gradient_extents(gradient.rank());
+    for (size_t axis{0}; axis < gradient.rank(); ++axis) {
+      gradient_extents[axis] = static_cast<uint64_t>(gradient.shape()[axis]);
+    }
+    vector<uint64_t> original_extents(original_shape.rank());
+    vector<uint64_t> original_strides(original_shape.rank());
+    const auto strides{original_shape.contiguous_strides()};
+    for (size_t axis{0}; axis < original_shape.rank(); ++axis) {
+      original_extents[axis] = static_cast<uint64_t>(original_shape[axis]);
+      original_strides[axis] = checked_cuda_index(strides[axis], "Shape stride");
+    }
+    cuda::broadcast_reduce(CudaTensorAccess::mutable_data(result),
+                           CudaTensorAccess::data(contiguous_gradient), gradient_extents,
+                           original_extents, original_strides, gradient.numel(), gradient.dtype(),
+                           gradient.device().index());
+    return result;
   }
 
   Tensor result{zeros(original_shape, gradient.dtype(), gradient.device())};

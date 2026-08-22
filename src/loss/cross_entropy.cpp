@@ -1,6 +1,7 @@
 module spar.loss.cross_entropy;
 
 import std;
+import spar.cuda_ops;
 import spar.dtype;
 import spar.ops.reduction;
 import spar.ops.scalar;
@@ -37,6 +38,15 @@ vector<size_t> validated_targets(const Tensor& targets, size_t classes) {
     append.template operator()<int64_t>();
   }
   return result;
+}
+
+void validate_target_metadata(const Tensor& targets) {
+  if (targets.dtype() != DType::Int32 && targets.dtype() != DType::Int64) {
+    throw invalid_argument{"cross_entropy targets must have Int32 or Int64 dtype"};
+  }
+  if (targets.requires_grad()) {
+    throw invalid_argument{"cross_entropy targets must not require gradients"};
+  }
 }
 
 template <typename T>
@@ -89,6 +99,24 @@ Tensor select_nll(const Tensor& log_probabilities, vector<size_t> targets,
   return output;
 }
 
+Tensor select_nll_cuda(const Tensor& log_probabilities, Tensor targets_snapshot, Shape output_shape,
+                       size_t sequence_length = 0) {
+  Tensor output{detail::cuda_ops::nll_forward(log_probabilities, targets_snapshot, output_shape,
+                                              sequence_length)};
+  if (log_probabilities.requires_grad()) {
+    const Shape input_shape{log_probabilities.shape()};
+    detail::record_operation(
+        output, {log_probabilities},
+        [input_shape, targets_snapshot = std::move(targets_snapshot),
+         sequence_length](const Tensor& gradient) {
+          const Tensor contiguous_gradient{gradient.detach().contiguous()};
+          return vector<Tensor>{detail::cuda_ops::nll_backward(
+              contiguous_gradient, targets_snapshot, input_shape, sequence_length)};
+        });
+  }
+  return output;
+}
+
 Tensor reduce_loss(const Tensor& losses, Reduction reduction) {
   switch (reduction) {
   case Reduction::None:
@@ -117,7 +145,6 @@ void validate_logits(const Tensor& logits) {
 
 Tensor cross_entropy(const Tensor& logits, const Tensor& targets, Reduction reduction) {
   detail::validate_same_device(logits, targets, "cross_entropy");
-  detail::require_cpu(logits, "cross_entropy");
   validate_logits(logits);
   if (targets.numel() == 0) {
     throw invalid_argument{"cross_entropy requires at least one target"};
@@ -128,6 +155,14 @@ Tensor cross_entropy(const Tensor& logits, const Tensor& targets, Reduction redu
     throw invalid_argument{"cross_entropy target shape does not match logits"};
   }
   const size_t classes{static_cast<size_t>(logits.shape()[logits.rank() - 1])};
+  validate_target_metadata(targets);
+  if (logits.device().is_cuda()) {
+    const Tensor targets_snapshot{targets.detach().clone()};
+    detail::cuda_ops::validate_targets(targets_snapshot, classes);
+    return reduce_loss(select_nll_cuda(log_softmax(logits, logits.rank() - 1),
+                                       std::move(targets_snapshot), targets.shape()),
+                       reduction);
+  }
   vector<size_t> targets_snapshot{validated_targets(targets, classes)};
   vector<size_t> rows(targets.numel());
   for (size_t index{0}; index < rows.size(); ++index) {
@@ -141,7 +176,6 @@ Tensor cross_entropy(const Tensor& logits, const Tensor& targets, Reduction redu
 Tensor language_model_cross_entropy(const Tensor& logits, const Tensor& token_ids,
                                     Reduction reduction) {
   detail::validate_same_device(logits, token_ids, "language_model_cross_entropy");
-  detail::require_cpu(logits, "language_model_cross_entropy");
   validate_logits(logits);
   if (logits.rank() != 3 || token_ids.rank() != 2) {
     throw invalid_argument{"language_model_cross_entropy requires logits [B,T,V] and IDs [B,T]"};
@@ -153,6 +187,15 @@ Tensor language_model_cross_entropy(const Tensor& logits, const Tensor& token_id
   const size_t batch{static_cast<size_t>(logits.shape()[0])};
   const size_t sequence{static_cast<size_t>(logits.shape()[1])};
   const size_t classes{static_cast<size_t>(logits.shape()[2])};
+  validate_target_metadata(token_ids);
+  if (logits.device().is_cuda()) {
+    const Tensor targets_snapshot{token_ids.detach().clone()};
+    detail::cuda_ops::validate_targets(targets_snapshot, classes);
+    const auto dimension = [](size_t value) { return static_cast<Shape::dimension_type>(value); };
+    return reduce_loss(select_nll_cuda(log_softmax(logits, 2), std::move(targets_snapshot),
+                                       Shape{dimension(batch), dimension(sequence - 1)}, sequence),
+                       reduction);
+  }
   const vector<size_t> all_tokens{validated_targets(token_ids, classes)};
   vector<size_t> targets;
   vector<size_t> rows;

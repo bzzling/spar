@@ -23,6 +23,13 @@ struct SoftmaxForwardResult final {
   Tensor undefined_slices;
 };
 
+struct GradientNormSummary final {
+  double scale;
+  double scaled_sum_squares;
+  bool has_infinity;
+  bool has_nan;
+};
+
 [[nodiscard]] Tensor binary(const Tensor& left, const Tensor& right, BinaryOperation operation);
 [[nodiscard]] Tensor scalar(const Tensor& input, double value, BinaryOperation operation);
 [[nodiscard]] Tensor unary(const Tensor& input, UnaryOperation operation);
@@ -44,6 +51,16 @@ struct SoftmaxForwardResult final {
                           bool inverse);
 [[nodiscard]] Tensor causal_mask(std::size_t sequence_length, DType dtype, Device device);
 [[nodiscard]] Tensor fill_from_device_scalar(Shape shape, const Tensor& scalar, double scale);
+void validate_targets(const Tensor& targets, std::size_t classes);
+[[nodiscard]] Tensor nll_forward(const Tensor& log_probabilities, const Tensor& targets,
+                                 Shape output_shape, std::size_t sequence_length = 0);
+[[nodiscard]] Tensor nll_backward(const Tensor& gradient, const Tensor& targets,
+                                  Shape log_probability_shape, std::size_t sequence_length = 0);
+[[nodiscard]] GradientNormSummary gradient_norm_summary(const Tensor& gradient);
+void scale_in_place(Tensor& values, double factor);
+void adamw_update(Tensor& parameter, const Tensor& gradient, Tensor& first_moment,
+                  Tensor& second_moment, std::uint64_t step, double learning_rate, double beta1,
+                  double beta2, double epsilon, double weight_decay);
 
 } // namespace spar::detail::cuda_ops
 
@@ -526,6 +543,155 @@ Tensor fill_from_device_scalar(Shape shape, const Tensor& scalar, double scale) 
   static_cast<void>(shape);
   static_cast<void>(scalar);
   static_cast<void>(scale);
+  unavailable();
+#endif
+}
+
+void validate_targets(const Tensor& targets, std::size_t classes) {
+#if SPAR_ENABLE_CUDA
+  if (!targets.device().is_cuda() || !targets.is_contiguous() ||
+      (targets.dtype() != DType::Int32 && targets.dtype() != DType::Int64) || classes == 0) {
+    throw std::logic_error{"Internal CUDA target validation received an invalid Tensor"};
+  }
+  std::int32_t invalid_target{0};
+  check(spar_cuda_validate_targets(&invalid_target, CudaTensorAccess::data(targets),
+                                   checked_count(targets.numel()), checked_count(classes),
+                                   index_dtype_tag(targets.dtype()), targets.device().index()),
+        "cross_entropy target validation", targets.device());
+  if (invalid_target != 0) {
+    throw std::out_of_range{"cross_entropy target is outside the class range"};
+  }
+#else
+  static_cast<void>(targets);
+  static_cast<void>(classes);
+  unavailable();
+#endif
+}
+
+Tensor nll_forward(const Tensor& log_probabilities, const Tensor& targets, Shape output_shape,
+                   std::size_t sequence_length) {
+#if SPAR_ENABLE_CUDA
+  if (!log_probabilities.device().is_cuda() || log_probabilities.device() != targets.device() ||
+      !log_probabilities.is_contiguous() || !targets.is_contiguous() ||
+      log_probabilities.rank() == 0 || output_shape.numel() == 0) {
+    throw std::logic_error{"Internal CUDA NLL forward received invalid tensors"};
+  }
+  Tensor output{std::move(output_shape), log_probabilities.dtype(), log_probabilities.device()};
+  const auto classes{
+      static_cast<std::size_t>(log_probabilities.shape()[log_probabilities.rank() - 1])};
+  check(spar_cuda_launch_nll_forward(CudaTensorAccess::mutable_data(output),
+                                     CudaTensorAccess::data(log_probabilities),
+                                     CudaTensorAccess::data(targets), checked_count(output.numel()),
+                                     checked_count(classes), checked_count(sequence_length),
+                                     dtype_tag(output.dtype()), index_dtype_tag(targets.dtype()),
+                                     sequence_length == 0 ? 0 : 1, output.device().index()),
+        "cross_entropy NLL forward", output.device());
+  return output;
+#else
+  static_cast<void>(log_probabilities);
+  static_cast<void>(targets);
+  static_cast<void>(output_shape);
+  static_cast<void>(sequence_length);
+  unavailable();
+#endif
+}
+
+Tensor nll_backward(const Tensor& gradient, const Tensor& targets, Shape log_probability_shape,
+                    std::size_t sequence_length) {
+#if SPAR_ENABLE_CUDA
+  if (!gradient.device().is_cuda() || gradient.device() != targets.device() ||
+      !gradient.is_contiguous() || !targets.is_contiguous() || log_probability_shape.rank() == 0) {
+    throw std::logic_error{"Internal CUDA NLL backward received invalid tensors"};
+  }
+  Tensor output{zeros(log_probability_shape, gradient.dtype(), gradient.device())};
+  const auto classes{
+      static_cast<std::size_t>(log_probability_shape[log_probability_shape.rank() - 1])};
+  check(spar_cuda_launch_nll_backward(
+            CudaTensorAccess::mutable_data(output), CudaTensorAccess::data(gradient),
+            CudaTensorAccess::data(targets), checked_count(gradient.numel()),
+            checked_count(classes), checked_count(sequence_length), dtype_tag(output.dtype()),
+            index_dtype_tag(targets.dtype()), sequence_length == 0 ? 0 : 1,
+            output.device().index()),
+        "cross_entropy NLL backward", output.device());
+  return output;
+#else
+  static_cast<void>(gradient);
+  static_cast<void>(targets);
+  static_cast<void>(log_probability_shape);
+  static_cast<void>(sequence_length);
+  unavailable();
+#endif
+}
+
+GradientNormSummary gradient_norm_summary(const Tensor& gradient) {
+#if SPAR_ENABLE_CUDA
+  if (!gradient.device().is_cuda() || !gradient.is_contiguous()) {
+    throw std::logic_error{"Internal CUDA gradient norm received an invalid Tensor"};
+  }
+  SparCudaNormSummary summary{};
+  check(spar_cuda_gradient_norm_summary(&summary, CudaTensorAccess::data(gradient),
+                                        checked_count(gradient.numel()),
+                                        dtype_tag(gradient.dtype()), gradient.device().index()),
+        "global gradient norm", gradient.device());
+  return {.scale = summary.scale,
+          .scaled_sum_squares = summary.scaled_sum_squares,
+          .has_infinity = summary.has_infinity != 0,
+          .has_nan = summary.has_nan != 0};
+#else
+  static_cast<void>(gradient);
+  unavailable();
+#endif
+}
+
+void scale_in_place(Tensor& values, double factor) {
+#if SPAR_ENABLE_CUDA
+  if (!values.device().is_cuda() || !values.is_contiguous()) {
+    throw std::logic_error{"Internal CUDA gradient scaling received an invalid Tensor"};
+  }
+  check(spar_cuda_launch_scale_in_place(CudaTensorAccess::mutable_data(values),
+                                        checked_count(values.numel()), dtype_tag(values.dtype()),
+                                        factor, values.device().index()),
+        "gradient scaling", values.device());
+#else
+  static_cast<void>(values);
+  static_cast<void>(factor);
+  unavailable();
+#endif
+}
+
+void adamw_update(Tensor& parameter, const Tensor& gradient, Tensor& first_moment,
+                  Tensor& second_moment, std::uint64_t step, double learning_rate, double beta1,
+                  double beta2, double epsilon, double weight_decay) {
+#if SPAR_ENABLE_CUDA
+  if (!parameter.device().is_cuda() || parameter.device() != gradient.device() ||
+      parameter.device() != first_moment.device() || parameter.device() != second_moment.device() ||
+      !parameter.is_contiguous() || !gradient.is_contiguous() || !first_moment.is_contiguous() ||
+      !second_moment.is_contiguous() || parameter.shape() != gradient.shape() ||
+      parameter.shape() != first_moment.shape() || parameter.shape() != second_moment.shape() ||
+      parameter.dtype() != gradient.dtype() || parameter.dtype() != first_moment.dtype() ||
+      parameter.dtype() != second_moment.dtype() || step == 0) {
+    throw std::logic_error{"Internal CUDA AdamW update received invalid tensors"};
+  }
+  const double first_correction{1.0 - std::pow(beta1, static_cast<double>(step))};
+  const double second_correction{1.0 - std::pow(beta2, static_cast<double>(step))};
+  check(spar_cuda_launch_adamw(
+            CudaTensorAccess::mutable_data(parameter), CudaTensorAccess::data(gradient),
+            CudaTensorAccess::mutable_data(first_moment),
+            CudaTensorAccess::mutable_data(second_moment), checked_count(parameter.numel()),
+            dtype_tag(parameter.dtype()), learning_rate, beta1, beta2, epsilon, weight_decay,
+            first_correction, second_correction, parameter.device().index()),
+        "AdamW update", parameter.device());
+#else
+  static_cast<void>(parameter);
+  static_cast<void>(gradient);
+  static_cast<void>(first_moment);
+  static_cast<void>(second_moment);
+  static_cast<void>(step);
+  static_cast<void>(learning_rate);
+  static_cast<void>(beta1);
+  static_cast<void>(beta2);
+  static_cast<void>(epsilon);
+  static_cast<void>(weight_decay);
   unavailable();
 #endif
 }

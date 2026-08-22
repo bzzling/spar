@@ -1,6 +1,7 @@
 module spar.optim.adamw;
 
 import std;
+import spar.cuda_ops;
 import spar.dtype;
 import spar.nn.parameter;
 import spar.tensor;
@@ -80,7 +81,10 @@ AdamW::AdamW(vector<nn::Parameter> parameters, double learning_rate, double beta
 }
 
 void AdamW::step() {
-  for (const Entry& entry : entries_) {
+  vector<size_t> active;
+  active.reserve(entries_.size());
+  for (size_t index{0}; index < entries_.size(); ++index) {
+    const Entry& entry{entries_[index]};
     const nn::Parameter& parameter{entry.parameter};
     if (!parameter.requires_grad() || !parameter.has_grad()) {
       continue;
@@ -91,28 +95,64 @@ void AdamW::step() {
         gradient.device() != parameter.tensor().device()) {
       throw logic_error{"AdamW gradient shape, dtype, or Device does not match its Parameter"};
     }
-    detail::require_cpu(parameter.tensor(), "AdamW step");
+    if (parameter.tensor().dtype() != DType::Float32 &&
+        parameter.tensor().dtype() != DType::Float64) {
+      throw logic_error{"AdamW encountered a non-floating Parameter"};
+    }
+    if (!parameter.tensor().is_contiguous() || !gradient.is_contiguous()) {
+      throw logic_error{"AdamW requires contiguous Parameters and gradients"};
+    }
+    if (entry.state) {
+      const State& state{*entry.state};
+      for (const Tensor* moment : {&state.first_moment, &state.second_moment}) {
+        if (moment->shape() != parameter.tensor().shape() ||
+            moment->dtype() != parameter.tensor().dtype() ||
+            moment->device() != parameter.tensor().device() || !moment->is_contiguous()) {
+          throw logic_error{"AdamW state shape, dtype, or Device does not match its Parameter"};
+        }
+      }
+      if (state.step == 0) {
+        throw logic_error{"AdamW initialized state has an invalid zero step"};
+      }
+      if (state.step == numeric_limits<uint64_t>::max()) {
+        throw overflow_error{"AdamW per-Parameter step counter overflow"};
+      }
+    }
+    active.push_back(index);
   }
 
-  for (Entry& entry : entries_) {
-    nn::Parameter& parameter{entry.parameter};
-    if (!parameter.requires_grad() || !parameter.has_grad()) {
-      continue;
-    }
-    const Tensor gradient{parameter.grad()};
+  vector<optional<pair<Tensor, Tensor>>> staged_states(entries_.size());
+  for (const size_t index : active) {
+    const Entry& entry{entries_[index]};
     if (!entry.state) {
-      entry.state.emplace(zeros(parameter.tensor().shape(), parameter.tensor().dtype(),
-                                parameter.tensor().device()),
-                          zeros(parameter.tensor().shape(), parameter.tensor().dtype(),
-                                parameter.tensor().device()),
-                          0);
+      staged_states[index].emplace(
+          zeros(entry.parameter.tensor().shape(), entry.parameter.tensor().dtype(),
+                entry.parameter.tensor().device()),
+          zeros(entry.parameter.tensor().shape(), entry.parameter.tensor().dtype(),
+                entry.parameter.tensor().device()));
     }
+  }
+  for (const size_t index : active) {
+    Entry& entry{entries_[index]};
+    if (staged_states[index]) {
+      entry.state.emplace(std::move(staged_states[index]->first),
+                          std::move(staged_states[index]->second), 0);
+    }
+  }
+
+  for (const size_t index : active) {
+    Entry& entry{entries_[index]};
+    nn::Parameter& parameter{entry.parameter};
+    const Tensor gradient{parameter.grad()};
     State& state{*entry.state};
-    if (state.step == numeric_limits<uint64_t>::max()) {
-      throw overflow_error{"AdamW per-Parameter step counter overflow"};
-    }
     ++state.step;
     Tensor values{parameter.tensor().detach()};
+    if (values.device().is_cuda()) {
+      detail::cuda_ops::adamw_update(values, gradient, state.first_moment, state.second_moment,
+                                     state.step, learning_rate_, beta1_, beta2_, epsilon_,
+                                     weight_decay_);
+      continue;
+    }
     switch (parameter.tensor().dtype()) {
     case DType::Float32:
       update_values<float>(values, gradient, state.first_moment, state.second_moment, state.step,
@@ -125,6 +165,29 @@ void AdamW::step() {
     case DType::Int32:
     case DType::Int64:
       throw logic_error{"AdamW encountered a non-floating Parameter"};
+    }
+  }
+}
+
+void AdamW::move_to(Device target) {
+  vector<optional<pair<Tensor, Tensor>>> staged_moments(entries_.size());
+  for (size_t index{0}; index < entries_.size(); ++index) {
+    const Entry& entry{entries_[index]};
+    if (entry.state) {
+      staged_moments[index].emplace(entry.state->first_moment.to(target),
+                                    entry.state->second_moment.to(target));
+    }
+  }
+  vector<nn::Parameter> tracked;
+  tracked.reserve(entries_.size());
+  for (Entry& entry : entries_) {
+    tracked.push_back(entry.parameter);
+  }
+  nn::move_to(span<nn::Parameter>{tracked}, target);
+  for (size_t index{0}; index < entries_.size(); ++index) {
+    if (staged_moments[index]) {
+      entries_[index].state->first_moment = std::move(staged_moments[index]->first);
+      entries_[index].state->second_moment = std::move(staged_moments[index]->second);
     }
   }
 }
